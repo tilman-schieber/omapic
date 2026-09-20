@@ -2,6 +2,9 @@
 name = "omapic"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
+description = "Keyboard-driven image viewer and temporary organizer for Omarchy"
+repository = "https://github.com/tilman-schieber/omapic"
 
 [dependencies]
 async-channel = "2.5.0"

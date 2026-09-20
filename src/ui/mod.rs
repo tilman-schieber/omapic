@@ -415,7 +415,8 @@ impl App {
         }
         let session = self.session.borrow();
         let in_workspace = session.active() != 0;
-        let mut hints: Vec<(&str, &str)> = Vec::new();
+        // First, so a narrow window never ellipsizes it away.
+        let mut hints: Vec<(&str, &str)> = vec![("?", "keys")];
         if self.view.borrow().is_empty() {
             if in_workspace {
                 hints.push(("alt+0", "all images"));
@@ -438,7 +439,6 @@ impl App {
                 hints.extend([("alt+1-9", "show bin"), ("enter", "enlarge"), (":", "commands")]);
             }
         }
-        hints.push(("?", "keys"));
         let markup: Vec<String> = hints
             .iter()
             .map(|(key, what)| format!("<b>{}</b> {what}", glib::markup_escape_text(key)))

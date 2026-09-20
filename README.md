@@ -1,50 +1,135 @@
 # omapic
 
-A tiny keyboard-driven image viewer and *temporary* organizer for Omarchy / Arch Linux.
-Rust + GTK4, themed from the active Omarchy theme.
+A tiny, fast, keyboard-driven image viewer and *temporary* organizer for
+[Omarchy](https://omarchy.org) / Arch Linux. Native Rust + GTK4, themed from
+the active Omarchy theme.
 
-open images → inspect quickly → throw them into numbered bins → optionally arrange a bin → run one explicit action on it
+<img src="docs/screenshot.png" alt="omapic: thumbnail grid with workspace badges, preview pane and status line" width="520">
 
-Nothing is persisted. Tagging and sorting live in memory; files change only when you run a
-command from the palette and confirm it.
+The whole workflow:
 
-## Use
+    open images → inspect quickly → throw the interesting ones into numbered bins
+                → optionally arrange a bin → run one explicit action on it
 
-    omapic               # images of the current directory
-    omapic image.jpg     # images of that directory, image.jpg selected
-    omapic DIR
-    omapic *.jpg …       # exactly these files
+omapic is **not** a photo library, DAM, editor, EXIF tool or tagging system.
+Nothing is persisted: bins and ordering live in memory and vanish when you
+quit. Files are touched only when you run a command from the palette and
+confirm it.
 
-| Keys | |
-|---|---|
-| arrows, `h j k l`, `g`/`G` | move around |
-| `Enter`, `Space` | enlarge preview |
-| `1`…`9` / `0` | put image into workspace / take it out |
-| `Alt+1`…`Alt+9` / `Alt+0` | show one workspace / all images |
-| `s` | manual sorting on/off (per workspace) |
-| `Shift+←/→`, `H`/`L`, drag | reorder (turns manual sorting on) |
-| `:` or `Ctrl+K` | commands: move, copy, rename by order, contact sheet, open folder |
-| `?` / `q` | keys / quit |
-
-Move, copy and rename check the whole batch for collisions first and never overwrite.
-A manually sorted workspace can be exported with `001_name.jpg` prefixes.
-Contact sheets need ImageMagick (`magick`).
-
-## Build
+## Install
 
     sudo pacman -S --needed rust gtk4 imagemagick
-    cargo build --release
-    install -Dm755 target/release/omapic ~/.local/bin/omapic
+    git clone https://github.com/tilman-schieber/omapic
+    cd omapic
+    cargo install --path .        # → ~/.cargo/bin/omapic
 
-## Layout
+ImageMagick (`magick`) is only needed for contact sheets. JPEG, PNG, WebP,
+GIF and TIFF are loaded through gdk-pixbuf/glycin, which GTK4 already pulls in.
 
-    src/model.rs     session state: workspaces, filter, ordering (no GTK, unit tested)
+## Usage
+
+    omapic               # images of the current directory
+    omapic image.jpg     # all images of that directory, image.jpg selected
+    omapic DIR           # images of DIR
+    omapic *.jpg …       # exactly the given files, in the given order
+
+Hover or move the selection to preview. The right end of the status line
+always hints at the keys that matter in the current context; `?` shows all.
+
+### Keys
+
+| Key | Action |
+|---|---|
+| arrows, `h` `j` `k` `l` | move around the grid |
+| `Home` `End`, `g` `G` | first / last image |
+| `Enter`, `Space` | enlarge preview (`Esc` to go back) |
+| `1` … `9` | put the selected image into that workspace |
+| `0` | take it out of its workspace |
+| `Alt+1` … `Alt+9` | show only that workspace |
+| `Alt+0` | show all images |
+| `s` | manual sorting on / off for the current view |
+| `Shift+←` `Shift+→`, `H` `L` | move the image backward / forward |
+| drag a thumbnail | reorder |
+| `:` or `Ctrl+K` | command palette |
+| `?` | key sheet |
+| `q` | quit |
+
+### Workspaces
+
+Nine numbered bins. An image is in at most one; assigning it elsewhere moves
+it, and it leaves the current view immediately if that view no longer
+matches. Tagged thumbnails carry a numbered badge, and the status line lists
+the non-empty bins with their counts.
+
+Every view (each bin, and "all") is either in natural order — the order the
+images were given or found, natural-sorted by name — or sorted by hand.
+Reordering turns manual sorting on; `s` switches back to natural order and
+remembers your arrangement in case you return. Reordering never renames
+anything.
+
+### Commands
+
+All commands act on the images **currently shown**, in the order shown.
+
+| Command | |
+|---|---|
+| Move workspace to folder… | asks for a folder (Tab completes, `~` works, created if missing) |
+| Copy workspace to folder… | same, leaving the originals |
+| Rename files in workspace according to current order… | in place: `001_name.jpg`, `002_…` |
+| Create contact sheet… | output file, columns, thumbnail size, labels on/off → `magick montage` |
+| Open containing folder | of the selected image |
+| Remove selected image from workspace | same as `0` |
+
+When a manually sorted view is moved or copied, omapic offers to persist the
+order as numeric prefixes. The width fits the image count (at least three
+digits), and an existing `NNN_` prefix is replaced rather than stacked.
+
+### Safety
+
+- Browsing, tagging and sorting never write anything, anywhere.
+- Each file operation is planned in full and checked first: existing targets,
+  two files mapping to one name, or missing sources abort it before the first
+  file is touched.
+- Nothing is ever overwritten; copies are created exclusively.
+- In-place renames whose targets overlap their sources go through temporary
+  names, and are rolled back if parking fails.
+- Every operation needs an explicit `y`.
+- There is no delete.
+
+## Theming
+
+Colours come from `~/.local/state/omarchy/current/theme/colors.toml` (or
+`~/.config/omarchy/current/…` on older installs) and follow theme switches
+while running. Without Omarchy a dark fallback palette is used. The font is
+the system `monospace`. Layout and styling live in `src/style.css`.
+
+The window is undecorated, as suits a tiling compositor. For Hyprland rules,
+the window class is `org.omapic.Omapic`.
+
+## Development
+
+    cargo test         # model, CLI, file operations, montage argv, theme parsing
+    cargo run -- ~/Pictures
+
+    src/model.rs     session state: workspaces, filter, ordering (no GTK)
     src/cli.rs       arguments → image list, natural sort
-    src/fsops.rs     the only code that touches files: plan → check → execute
+    src/fsops.rs     the only code that modifies files: plan → check → execute
     src/montage.rs   `magick montage` invocation
     src/thumbs.rs    off-thread decoding, thumbnail worker pool
-    src/theme.rs     Omarchy colors.toml → GTK CSS (style.css), reloads on theme change
+    src/theme.rs     Omarchy colors.toml → GTK CSS, live reload
     src/ui/          window, grid cells, preview, palette, commands
 
-Debug builds accept `OMAPIC_SCRIPT` (see `src/ui/debug.rs`) to drive the UI and
-render snapshots for smoke tests.
+Thumbnails are decoded on worker threads, nearest-to-viewport first, and
+kept in a bounded in-memory cache; the full-size preview is decoded only
+for the image being looked at.
+
+Debug builds can be driven by a script for smoke tests, including rendering
+the window to a PNG without a visible screen:
+
+    OMAPIC_SCRIPT="l 1 l 2 alt+1 snap:/tmp/shot.png" cargo run -- DIR
+
+See `src/ui/debug.rs` for the step syntax.
+
+## License
+
+[MIT](LICENSE)
