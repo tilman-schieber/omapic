@@ -102,23 +102,82 @@ fn embedded(path: &Path, target: i32) -> Option<Quick> {
     Some(Quick { texture, sharp: false })
 }
 
-/// Locate the JPEG preview in a JPEG's EXIF data: (byte range, orientation).
-pub fn exif_thumbnail(jpeg: &[u8]) -> Option<(Range<usize>, u16)> {
+/// Start of the TIFF block inside the JPEG's EXIF segment.
+fn find_tiff(jpeg: &[u8]) -> Option<usize> {
     if jpeg.get(..2)? != [0xff, 0xd8] {
         return None;
     }
     let mut pos = 2;
-    let tiff_start = loop {
+    loop {
         let marker = jpeg.get(pos..pos + 4)?;
         if marker[0] != 0xff || marker[1] == 0xda || marker[1] == 0xd9 {
             return None;
         }
         let length = u16::from_be_bytes([marker[2], marker[3]]) as usize;
         if marker[1] == 0xe1 && jpeg.get(pos + 4..pos + 10)? == b"Exif\0\0" {
-            break pos + 10;
+            return Some(pos + 10);
         }
         pos += 2 + length;
+    }
+}
+
+/// What a JPEG says about its orientation, and where.
+#[derive(Debug, PartialEq)]
+pub enum Orientation {
+    NoExif,
+    /// EXIF data without an orientation entry.
+    NoTag,
+    /// File offset of the two value bytes, their byte order, the value.
+    Tag { offset: usize, little_endian: bool, value: u16 },
+}
+
+pub fn exif_orientation(jpeg: &[u8]) -> Orientation {
+    let Some(tiff_start) = find_tiff(jpeg) else { return Orientation::NoExif };
+    let find = || {
+        let tiff = &jpeg[tiff_start..];
+        let little = tiff.get(..2)? == b"II";
+        let read = |at: usize, len: usize| -> Option<usize> {
+            let bytes = tiff.get(at..at + len)?;
+            Some(bytes.iter().enumerate().fold(0, |value, (i, &b)| {
+                value | (b as usize) << (8 * if little { i } else { len - 1 - i })
+            }))
+        };
+        let ifd0 = read(4, 4)?;
+        (0..read(ifd0, 2)?).map(|i| ifd0 + 2 + i * 12).find(|&entry| read(entry, 2) == Some(0x0112)).map(
+            |entry| Orientation::Tag {
+                offset: tiff_start + entry + 8,
+                little_endian: little,
+                value: read(entry + 8, 2).unwrap_or(1) as u16,
+            },
+        )
     };
+    find().unwrap_or(Orientation::NoTag)
+}
+
+/// The EXIF orientation that shows an image `quarters` further clockwise.
+pub fn turned(orientation: u16, quarters: u8) -> u16 {
+    (0..quarters % 4).fold(orientation, |o, _| match o {
+        6 => 3,
+        3 => 8,
+        8 => 1,
+        // the mirrored ones
+        2 => 7,
+        7 => 4,
+        4 => 5,
+        5 => 2,
+        _ => 6,
+    })
+}
+
+/// Turn a texture clockwise by quarter turns.
+pub fn rotate(texture: &gdk::Texture, quarters: u8) -> gdk::Texture {
+    let turned = adjust(texture, turned(1, quarters), i32::MAX - i32::MAX / 4);
+    turned.unwrap_or_else(|| texture.clone())
+}
+
+/// Locate the JPEG preview in a JPEG's EXIF data: (byte range, orientation).
+pub fn exif_thumbnail(jpeg: &[u8]) -> Option<(Range<usize>, u16)> {
+    let tiff_start = find_tiff(jpeg)?;
     let tiff = &jpeg[tiff_start..];
     let little = match tiff.get(..2)? {
         b"II" => true,
@@ -244,6 +303,23 @@ mod tests {
         let (range, orientation) = exif_thumbnail(&jpeg).unwrap();
         assert_eq!(&jpeg[range], thumb);
         assert_eq!(orientation, 6);
+    }
+
+    #[test]
+    fn orientation_tag_and_turning() {
+        let jpeg = sample_jpeg(6, &[0xff, 0xd8]);
+        let Orientation::Tag { offset, little_endian, value } = exif_orientation(&jpeg) else { panic!() };
+        assert_eq!((little_endian, value), (false, 6));
+        assert_eq!(jpeg[offset..offset + 2], [0, 6]);
+        assert_eq!(exif_orientation(&[0xff, 0xd8, 0xff, 0xda, 0, 2]), Orientation::NoExif);
+
+        assert_eq!([1, 2, 3].map(|q| turned(1, q)), [6, 3, 8]);
+        assert_eq!(turned(8, 1), 1);
+        assert_eq!(turned(6, 4), 6);
+        for mirrored in [2, 4, 5, 7] {
+            assert_eq!(turned(turned(mirrored, 1), 3), mirrored);
+            assert!([2, 4, 5, 7].contains(&turned(mirrored, 1)));
+        }
     }
 
     #[test]

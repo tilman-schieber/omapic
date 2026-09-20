@@ -44,6 +44,7 @@ always hints at the keys that matter in the current context; `?` shows all.
 | `Home` `End`, `g` `G` | first / last image |
 | `n` / `N` | next / previous binned image |
 | `Enter`, `Space` | enlarge preview (`Esc` to go back) |
+| `r` / `R` | rotate right / left — in the session only, until saved from the palette |
 | `z` | actual pixels at the pointer; drag to pan, position is kept from image to image |
 | `1` … `9` | put the selected image into that workspace |
 | `0` | take it out of its workspace |
@@ -55,7 +56,7 @@ always hints at the keys that matter in the current context; `?` shows all.
 | `s` | manual sorting on / off for the current view |
 | `Shift+←` `Shift+→`, `H` `L` | move the image backward / forward |
 | drag a thumbnail | reorder |
-| `u` / `U`, `Ctrl+R` | undo / redo binning, ordering and sort toggles (never file operations) |
+| `u` / `U`, `Ctrl+R` | undo / redo binning, ordering, rotating and sort toggles (never file operations) |
 | `f` | file names under thumbnails |
 | `:` or `Ctrl+K` | command palette |
 | `?` | key sheet |
@@ -84,12 +85,24 @@ All commands act on the images **currently shown**, in the order shown.
 | Copy workspace to folder… | same, leaving the originals |
 | Rename files in workspace according to current order… | in place: `001_name.jpg`, `002_…` |
 | Create contact sheet… | output file, columns, thumbnail size, labels on/off → `magick montage` |
+| Save rotations to files… | writes pending `r`/`R` rotations of the shown JPEGs |
 | Open containing folder | of the selected image |
 | Remove selected image from workspace | same as `0` |
 
 When a manually sorted view is moved or copied, omapic offers to persist the
 order as numeric prefixes. The width fits the image count (at least three
 digits), and an existing `NNN_` prefix is replaced rather than stacked.
+
+### Rotation
+
+`r` and `R` turn the selected image (or marked range) like everything else in
+omapic: on screen, in memory, undoable. The status line counts unsaved
+rotations. *Save rotations to files…* makes them permanent, losslessly: only
+the JPEG's EXIF orientation value is changed (two bytes, in place); a JPEG
+without EXIF data gets a minimal EXIF block. Image data is never re-encoded.
+JPEG only; a file whose EXIF block lacks an orientation entry is reported
+and left alone. Other commands work on the files as they are on disk, so save
+rotations before making a contact sheet.
 
 ### Safety
 
@@ -101,6 +114,8 @@ digits), and an existing `NNN_` prefix is replaced rather than stacked.
 - In-place renames whose targets overlap their sources go through temporary
   names, and are rolled back if parking fails.
 - Every operation needs an explicit `y`.
+- The only command that changes file contents is *Save rotations*, and it
+  changes nothing but the orientation value.
 - There is no delete.
 
 ## Theming
@@ -120,10 +135,10 @@ the window class is `org.omapic.Omapic`.
 
     src/model.rs     session state: workspaces, filter, ordering (no GTK)
     src/cli.rs       arguments → image list, natural sort
-    src/fsops.rs     the only code that modifies files: plan → check → execute
+    src/fsops.rs     the only code that modifies files: plan → check → execute; EXIF rotation
     src/montage.rs   `magick montage` invocation
     src/thumbs.rs    off-thread decoding, thumbnail worker pool
-    src/quick.rs     ready-made thumbnails: XDG cache lookup, EXIF previews
+    src/quick.rs     ready-made thumbnails: XDG cache lookup, EXIF previews; EXIF orientation
     src/theme.rs     Omarchy colors.toml → GTK CSS, live reload
     src/ui/          window, grid cells, preview, palette, commands
 

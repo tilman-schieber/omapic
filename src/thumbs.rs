@@ -7,14 +7,15 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
 use gtk::gdk;
-use gtk::gdk_pixbuf::Pixbuf;
+use gtk::gdk_pixbuf::{Pixbuf, PixbufRotation};
 
 use crate::model::ImageId;
 use crate::quick;
 
 /// Decode `path`, scaled down so neither side exceeds `max` pixels.
-/// Small images are never scaled up. EXIF orientation is applied.
-pub fn decode(path: &Path, max: i32) -> Option<gdk::Texture> {
+/// Small images are never scaled up. EXIF orientation is applied, then
+/// `quarters` clockwise turns on top (rotation pending in the session).
+pub fn decode(path: &Path, max: i32, quarters: u8) -> Option<gdk::Texture> {
     let (_, width, height) = Pixbuf::file_info(path)?;
     let pixbuf = if width > max || height > max {
         Pixbuf::from_file_at_scale(path, max, max, true).ok()?
@@ -22,6 +23,13 @@ pub fn decode(path: &Path, max: i32) -> Option<gdk::Texture> {
         Pixbuf::from_file(path).ok()?
     };
     let pixbuf = pixbuf.apply_embedded_orientation().unwrap_or(pixbuf);
+    let rotation = match quarters % 4 {
+        1 => PixbufRotation::Clockwise,
+        2 => PixbufRotation::Upsidedown,
+        3 => PixbufRotation::Counterclockwise,
+        _ => PixbufRotation::None,
+    };
+    let pixbuf = pixbuf.rotate_simple(rotation).unwrap_or(pixbuf);
     Some(quick::texture_from_pixbuf(&pixbuf))
 }
 
@@ -85,7 +93,7 @@ impl Thumbnailer {
                         },
                         Stage::Full => {
                             jobs.0.lock().unwrap().wanted.remove(&job.id);
-                            Some((decode(&job.path, size), true))
+                            Some((decode(&job.path, size, 0), true))
                         }
                     };
                     if let Some((texture, sharp)) = result {

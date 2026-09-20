@@ -16,6 +16,7 @@ const COMMANDS: &[&str] = &[
     "Copy workspace to folder…",
     "Rename files in workspace according to current order…",
     "Create contact sheet…",
+    "Save rotations to files…",
     "Open containing folder",
     "Remove selected image from workspace",
     "Keyboard shortcuts",
@@ -31,8 +32,9 @@ pub async fn run(app: Rc<App>, index: usize) {
         1 => transfer(&app, Op::Copy).await,
         2 => rename(&app).await,
         3 => contact_sheet(&app).await,
-        4 => open_folder(&app),
-        5 => {
+        4 => save_rotations(&app).await,
+        5 => open_folder(&app),
+        6 => {
             app.assign(None);
             Ok(None)
         }
@@ -135,6 +137,38 @@ async fn finish(app: &Rc<App>, plan: fsops::Plan, files: &[(usize, PathBuf)], do
             let place = plan.steps[0].dst.parent().map(|p| p.display().to_string()).unwrap_or_default();
             Ok(Some(format!("{done} {count} files → {place}")))
         }
+    }
+}
+
+/// Write the pending rotations of the shown images into their files.
+async fn save_rotations(app: &Rc<App>) -> Outcome {
+    let jobs: Vec<(usize, PathBuf, u8)> = {
+        let session = app.session.borrow();
+        let turned = |id: usize| Some(session.image(id).rotation).filter(|&r| r != 0);
+        app.visible_files().into_iter().filter_map(|(id, path)| Some((id, path, turned(id)?))).collect()
+    };
+    if jobs.is_empty() {
+        return Err(format!("no unsaved rotations in {} (r / R rotate)", app.view_name()));
+    }
+    let question = format!(
+        "Write the rotation of {} JPEGs in {} to the files (EXIF orientation, lossless)?",
+        jobs.len(),
+        app.view_name()
+    );
+    if app.palette.ask_yes_no(&question, false).await != Some(true) {
+        return Ok(None);
+    }
+    let results = gio::spawn_blocking(move || {
+        jobs.into_iter().map(|(id, path, turns)| (id, fsops::save_rotation(&path, turns))).collect::<Vec<_>>()
+    })
+    .await
+    .map_err(|_| "rotation crashed".to_string())?;
+
+    let saved: Vec<usize> = results.iter().filter(|(_, r)| r.is_ok()).map(|(id, _)| *id).collect();
+    app.rotations_saved(&saved);
+    match results.into_iter().find_map(|(_, r)| r.err()) {
+        Some(problem) => Err(format!("saved {}, but {problem}", saved.len())),
+        None => Ok(Some(format!("rotation of {} files saved", saved.len()))),
     }
 }
 

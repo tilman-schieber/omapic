@@ -14,6 +14,8 @@ pub const UNBINNED: u8 = WORKSPACES + 1;
 pub struct ImageEntry {
     pub path: PathBuf,
     pub workspace: Option<u8>,
+    /// Quarter turns clockwise, shown but not yet written to the file.
+    pub rotation: u8,
 }
 
 /// Sort state of one view. View 0 is "all images", 1..=9 are the
@@ -30,6 +32,7 @@ pub struct Workspace {
 #[derive(Debug, Clone)]
 struct Snapshot {
     workspaces: Vec<Option<u8>>,
+    rotations: Vec<u8>,
     views: Vec<Workspace>,
     active: u8,
     selected: Option<ImageId>,
@@ -53,7 +56,7 @@ impl Session {
     pub fn new(paths: Vec<PathBuf>) -> Self {
         let images = paths
             .into_iter()
-            .map(|path| ImageEntry { path, workspace: None })
+            .map(|path| ImageEntry { path, workspace: None, rotation: 0 })
             .collect();
         Session {
             images,
@@ -69,6 +72,7 @@ impl Session {
     fn snapshot(&self) -> Snapshot {
         Snapshot {
             workspaces: self.images.iter().map(|e| e.workspace).collect(),
+            rotations: self.images.iter().map(|e| e.rotation).collect(),
             views: self.views.clone(),
             active: self.active,
             selected: self.selected,
@@ -78,6 +82,9 @@ impl Session {
     fn restore(&mut self, snapshot: Snapshot) {
         for (entry, workspace) in self.images.iter_mut().zip(snapshot.workspaces) {
             entry.workspace = workspace;
+        }
+        for (entry, rotation) in self.images.iter_mut().zip(snapshot.rotations) {
+            entry.rotation = rotation;
         }
         self.views = snapshot.views;
         self.active = snapshot.active;
@@ -185,6 +192,34 @@ impl Session {
         let visible = self.visible();
         if !self.selected.is_some_and(|id| visible.contains(&id)) {
             self.selected = visible.first().copied();
+        }
+    }
+
+    /// Turn the given images by `quarters` clockwise (negative: counter-clockwise).
+    /// Session-only, like everything else here; one undo step.
+    pub fn rotate(&mut self, ids: &[ImageId], quarters: i8) {
+        let turns = quarters.rem_euclid(4) as u8;
+        let ids: Vec<ImageId> = ids.iter().copied().filter(|&id| id < self.images.len()).collect();
+        if turns == 0 || ids.is_empty() {
+            return;
+        }
+        self.checkpoint(self.snapshot());
+        for id in ids {
+            self.images[id].rotation = (self.images[id].rotation + turns) % 4;
+        }
+    }
+
+    pub fn pending_rotations(&self) -> usize {
+        self.images.iter().filter(|e| e.rotation != 0).count()
+    }
+
+    /// The pending rotation of `id` has been written to its file: the file
+    /// is the new baseline, also for every state undo could bring back.
+    pub fn rotation_saved(&mut self, id: ImageId) {
+        let Some(entry) = self.images.get_mut(id) else { return };
+        let saved = std::mem::take(&mut entry.rotation);
+        for snapshot in self.undo.iter_mut().chain(self.redo.iter_mut()) {
+            snapshot.rotations[id] = (snapshot.rotations[id] + 4 - saved) % 4;
         }
     }
 
@@ -437,6 +472,27 @@ mod tests {
         s.set_active(2);
         s.assign_marked(None); // and back onto the pile
         assert_eq!(s.unbinned_count(), 3);
+    }
+
+    #[test]
+    fn rotation_is_pending_and_undoable() {
+        let mut s = session(3);
+        s.rotate(&[0, 1], 1);
+        s.rotate(&[1], -2);
+        assert_eq!((s.image(0).rotation, s.image(1).rotation), (1, 3));
+        assert_eq!(s.pending_rotations(), 2);
+        s.rotate(&[2], 4); // a full turn is nothing
+        assert!(s.undo());
+        assert_eq!(s.image(1).rotation, 1);
+
+        // Image 1 is written to disk with one quarter turn. Undoing to the
+        // state before any rotation now means turning it back by one.
+        s.rotation_saved(1);
+        assert_eq!(s.image(1).rotation, 0);
+        assert!(s.undo());
+        assert_eq!((s.image(0).rotation, s.image(1).rotation), (0, 3));
+        assert!(s.redo());
+        assert_eq!((s.image(0).rotation, s.image(1).rotation), (1, 0));
     }
 
     #[test]

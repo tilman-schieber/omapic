@@ -22,6 +22,9 @@ mod imp {
         workspace: Cell<u32>,
         #[property(get, set, nullable)]
         texture: RefCell<Option<gdk::Texture>>,
+        /// Quarter turns of pending rotation baked into `texture`.
+        #[property(get, set)]
+        turns: Cell<u32>,
         /// The texture is a proper thumbnail, not a stand-in.
         #[property(get, set)]
         sharp: Cell<bool>,

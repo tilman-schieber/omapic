@@ -17,6 +17,11 @@ pub fn is_image(path: &Path) -> bool {
         .is_some_and(|e| EXTENSIONS.iter().any(|x| e.eq_ignore_ascii_case(x)))
 }
 
+pub fn is_jpeg(path: &Path) -> bool {
+    let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    extension.eq_ignore_ascii_case("jpg") || extension.eq_ignore_ascii_case("jpeg")
+}
+
 /// * no argument: images of the current directory
 /// * one file: all images of its directory, that file selected
 /// * several paths: exactly those files (directories contribute their images)

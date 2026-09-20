@@ -24,8 +24,18 @@ const CACHED: usize = 8;
 /// Sweeping the pointer across the grid shouldn't start a decode per thumbnail.
 const SETTLE: Duration = Duration::from_millis(40);
 
+/// An image as the preview should show it.
+#[derive(Clone)]
+pub struct Shot {
+    pub id: ImageId,
+    pub path: PathBuf,
+    /// Pending rotation, quarter turns clockwise.
+    pub turns: u8,
+}
+
 struct Full {
     id: ImageId,
+    turns: u8,
     texture: gdk::Texture,
     dimensions: (i32, i32),
 }
@@ -37,6 +47,7 @@ pub struct Preview {
     caption: gtk::Label,
     target: Cell<Option<ImageId>>,
     target_path: RefCell<PathBuf>,
+    target_turns: Cell<u8>,
     has_full: Cell<bool>,
     /// One image pixel per screen pixel instead of fit-to-pane.
     actual_size: Cell<bool>,
@@ -77,6 +88,7 @@ impl Preview {
             caption,
             target: Cell::new(None),
             target_path: RefCell::default(),
+            target_turns: Cell::new(0),
             has_full: Cell::new(false),
             actual_size: Cell::new(false),
             original: RefCell::default(),
@@ -218,11 +230,11 @@ impl Preview {
         if !downscaled || self.original.borrow().as_ref().is_some_and(|(have, _)| *have == id) {
             return;
         }
-        let (this, path) = (self.clone(), self.target_path.borrow().clone());
+        let (this, path, turns) = (self.clone(), self.target_path.borrow().clone(), self.target_turns.get());
         glib::spawn_future_local(async move {
-            let loaded = gio::spawn_blocking(move || thumbs::decode(&path, i32::MAX)).await;
+            let loaded = gio::spawn_blocking(move || thumbs::decode(&path, i32::MAX, turns)).await;
             if let Ok(Some(texture)) = loaded {
-                if this.target.get() == Some(id) && this.actual_size.get() {
+                if this.wants(id, turns) && this.actual_size.get() {
                     this.picture.set_paintable(Some(&texture));
                     this.original.replace(Some((id, texture)));
                 }
@@ -245,53 +257,54 @@ impl Preview {
         }
     }
 
-    /// `neighbours` are decoded ahead once `id` itself is on screen.
-    pub fn show(
-        self: &Rc<Self>,
-        id: ImageId,
-        path: PathBuf,
-        placeholder: Option<gdk::Texture>,
-        neighbours: Vec<(ImageId, PathBuf)>,
-    ) {
-        if self.target.get() == Some(id) {
-            self.caption_for(&path, self.cached_dimensions(id));
+    fn wants(&self, id: ImageId, turns: u8) -> bool {
+        self.target.get() == Some(id) && self.target_turns.get() == turns
+    }
+
+    /// `neighbours` are decoded ahead once the shot itself is on screen.
+    pub fn show(self: &Rc<Self>, shot: Shot, placeholder: Option<gdk::Texture>, neighbours: Vec<Shot>) {
+        if self.wants(shot.id, shot.turns) {
+            self.caption_for(&shot.path, self.cached_dimensions(shot.id));
             return;
         }
-        self.target.set(Some(id));
-        self.target_path.replace(path.clone());
+        self.target.set(Some(shot.id));
+        self.target_turns.set(shot.turns);
+        self.target_path.replace(shot.path.clone());
         self.original.take();
         let generation = self.generation.get() + 1;
         self.generation.set(generation);
 
-        if self.display_cached(id, &path) {
-            self.fetch_original(id);
-            for (id, path) in neighbours {
-                self.fetch(id, path, Vec::new());
+        if self.display_cached(&shot) {
+            self.fetch_original(shot.id);
+            for neighbour in neighbours {
+                self.fetch(neighbour, Vec::new());
             }
             return;
         }
         self.has_full.set(false);
         self.picture.set_paintable(placeholder.as_ref());
+        self.caption_for(&shot.path, None);
         self.layout();
-        self.caption_for(&path, None);
 
         let this = Rc::downgrade(self);
         glib::timeout_add_local_once(SETTLE, move || {
             if let Some(this) = this.upgrade().filter(|t| t.generation.get() == generation) {
-                this.fetch(id, path, neighbours);
+                this.fetch(shot, neighbours);
             }
         });
     }
 
-    /// Show `id` from the cache, marking it most recently used.
-    fn display_cached(&self, id: ImageId, path: &std::path::Path) -> bool {
+    /// Show the shot from the cache, marking it most recently used.
+    fn display_cached(&self, shot: &Shot) -> bool {
         {
             let mut cache = self.cache.borrow_mut();
-            let Some(index) = cache.iter().position(|f| f.id == id) else { return false };
+            let Some(index) = cache.iter().position(|f| f.id == shot.id && f.turns == shot.turns) else {
+                return false;
+            };
             let full = cache.remove(index).unwrap();
             self.has_full.set(true);
             self.picture.set_paintable(Some(&full.texture));
-            self.caption_for(path, Some(full.dimensions));
+            self.caption_for(&shot.path, Some(full.dimensions));
             cache.push_back(full);
         }
         self.layout();
@@ -299,46 +312,50 @@ impl Preview {
     }
 
     /// Decode into the cache; display if it is (still) the image wanted.
-    /// `then` are fetched afterwards, so they never compete with `id`.
-    fn fetch(self: &Rc<Self>, id: ImageId, path: PathBuf, then: Vec<(ImageId, PathBuf)>) {
-        let known = self.cache.borrow().iter().any(|f| f.id == id);
-        if known || !self.loading.borrow_mut().insert(id) {
-            for (id, path) in then {
-                self.fetch(id, path, Vec::new());
+    /// `then` are fetched afterwards, so they never compete with `shot`.
+    fn fetch(self: &Rc<Self>, shot: Shot, then: Vec<Shot>) {
+        let known = self.cache.borrow().iter().any(|f| f.id == shot.id && f.turns == shot.turns);
+        if known || !self.loading.borrow_mut().insert(shot.id) {
+            for next in then {
+                self.fetch(next, Vec::new());
             }
             return;
         }
         let this = self.clone();
         glib::spawn_future_local(async move {
-            let job_path = path.clone();
+            let job = shot.clone();
             let loaded = gio::spawn_blocking(move || {
-                let dimensions = Pixbuf::file_info(&job_path).map(|(_, w, h)| (w, h));
-                (thumbs::decode(&job_path, MAX_EDGE), dimensions)
+                let dimensions = Pixbuf::file_info(&job.path).map(|(_, w, h)| (w, h));
+                (thumbs::decode(&job.path, MAX_EDGE, job.turns), dimensions)
             })
             .await;
-            this.loading.borrow_mut().remove(&id);
+            this.loading.borrow_mut().remove(&shot.id);
             if let Ok((Some(texture), dimensions)) = loaded {
-                let dimensions = dimensions.unwrap_or((texture.width(), texture.height()));
+                let (w, h) = dimensions.unwrap_or((texture.width(), texture.height()));
+                // File dimensions, as the pending rotation will leave them.
+                let dimensions = if shot.turns % 2 == 1 { (h, w) } else { (w, h) };
                 {
                     let mut cache = this.cache.borrow_mut();
-                    cache.push_back(Full { id, texture, dimensions });
+                    cache.retain(|f| f.id != shot.id);
+                    cache.push_back(Full { id: shot.id, turns: shot.turns, texture, dimensions });
                     while cache.len() > CACHED {
                         cache.pop_front();
                     }
                 }
-                if this.target.get() == Some(id) && !this.has_full.get() {
-                    this.display_cached(id, &path);
-                    this.fetch_original(id);
+                if this.wants(shot.id, shot.turns) && !this.has_full.get() {
+                    this.display_cached(&shot);
+                    this.fetch_original(shot.id);
                 }
             }
-            for (id, path) in then {
-                this.fetch(id, path, Vec::new());
+            for next in then {
+                this.fetch(next, Vec::new());
             }
         });
     }
 
     fn cached_dimensions(&self, id: ImageId) -> Option<(i32, i32)> {
-        self.cache.borrow().iter().find(|f| f.id == id).map(|f| f.dimensions)
+        let turns = self.target_turns.get();
+        self.cache.borrow().iter().find(|f| f.id == id && f.turns == turns).map(|f| f.dimensions)
     }
 
     fn caption_for(&self, path: &std::path::Path, dimensions: Option<(i32, i32)>) {

@@ -22,7 +22,7 @@ use crate::theme::{self, Theme};
 use crate::thumbs::{Thumbnail, Thumbnailer};
 use item::ImageItem;
 use palette::Palette;
-use preview::Preview;
+use preview::{Preview, Shot};
 
 /// Thumbnails kept in memory; beyond this, off-screen ones are dropped again.
 const THUMB_CACHE: usize = 1200;
@@ -32,6 +32,7 @@ const HELP: &str = "\
 <b>home end</b>  <b>g G</b>      first / last image
 <b>n</b>  <b>N</b>               next / previous binned image
 <b>enter</b>  <b>space</b>       enlarge preview
+<b>r</b>  <b>R</b>               rotate right / left (in the session; save via <b>:</b>)
 <b>z</b>                  actual pixels at the pointer; drag to pan
 <b>1</b> … <b>9</b>              put image into workspace
 <b>0</b>                  take image out of its workspace
@@ -43,7 +44,7 @@ const HELP: &str = "\
 <b>s</b>                  manual sorting on / off
 <b>shift+←→</b>  <b>H L</b>      move image backward / forward
 <b>drag</b>               reorder thumbnails
-<b>u</b>  <b>U</b> / <b>ctrl+r</b>      undo / redo binning and ordering
+<b>u</b>  <b>U</b> / <b>ctrl+r</b>      undo / redo binning, ordering, rotating
 <b>f</b>                  file names under thumbnails
 <b>:</b>  <b>ctrl+k</b>          commands
 <b>?</b>                  this sheet
@@ -363,6 +364,14 @@ impl App {
             if item.workspace() != ws {
                 item.set_workspace(ws);
             }
+            // Rotated, or a rotation undone: turn the thumbnail to match.
+            let (shown, wanted) = (item.turns() as u8 % 4, entry.rotation);
+            if shown != wanted {
+                if let Some(texture) = item.texture() {
+                    item.set_texture(Some(crate::quick::rotate(&texture, (wanted + 4 - shown) % 4)));
+                }
+                item.set_turns(wanted as u32);
+            }
             let name = file_name(&entry.path);
             if item.name() != name {
                 item.set_name(name); // files get renamed by commands
@@ -405,19 +414,20 @@ impl App {
             .or(session.selected());
         match target {
             Some(id) => {
-                let path = session.image(id).path.clone();
+                let shot = |id: ImageId| {
+                    let entry = session.image(id);
+                    Shot { id, path: entry.path.clone(), turns: entry.rotation }
+                };
                 // Stepping with the keyboard: have both neighbours ready.
                 let mut neighbours = Vec::new();
                 if session.selected() == Some(id) {
                     let view = self.view.borrow();
                     if let Some(position) = view.iter().position(|&x| x == id) {
                         let around = [position.checked_add(1), position.checked_sub(1)];
-                        for &other in around.iter().flatten().filter_map(|&p| view.get(p)) {
-                            neighbours.push((other, session.image(other).path.clone()));
-                        }
+                        neighbours.extend(around.iter().flatten().filter_map(|&p| view.get(p)).map(|&n| shot(n)));
                     }
                 }
-                self.preview.show(id, path, self.items[id].texture(), neighbours);
+                self.preview.show(shot(id), self.items[id].texture(), neighbours);
                 if self.items[id].texture().is_none() && !self.items[id].failed() {
                     let position = self.view.borrow().iter().position(|&x| x == id).unwrap_or(0);
                     self.thumbs.request(id, session.image(id).path.clone(), position, false);
@@ -455,7 +465,11 @@ impl App {
         let position = self.selected_position().map_or(0, |p| p + 1);
         let sort = if session.manual_sort() { "manual" } else { "natural" };
         let advance = if self.advance.get() { "  ·  bin→next" } else { "" };
-        self.info.set_label(&format!("{position}/{}  ·  {sort}{advance}", self.view.borrow().len()));
+        let rotated = match session.pending_rotations() {
+            0 => String::new(),
+            n => format!("  ·  {n} rotated, unsaved"),
+        };
+        self.info.set_label(&format!("{position}/{}  ·  {sort}{advance}{rotated}", self.view.borrow().len()));
         if session.manual_sort() {
             self.info.add_css_class("manual");
         } else {
@@ -474,6 +488,9 @@ impl App {
         let in_workspace = session.active() != 0;
         // First, so a narrow window never ellipsizes it away.
         let mut hints: Vec<(&str, &str)> = vec![("?", "keys")];
+        if session.pending_rotations() > 0 {
+            hints.push((":", "save rotations"));
+        }
         let marked = session.marked().len();
         let count = format!("bin {marked} images");
         if session.has_range() {
@@ -486,7 +503,7 @@ impl App {
             if self.preview.is_actual_size() {
                 hints.extend([("drag", "pan"), ("z", "fit"), ("←→", "compare")]);
             } else {
-                hints.extend([("←→", "browse"), ("z", "1:1"), ("1-9", "bin"), ("esc", "back")]);
+                hints.extend([("←→", "browse"), ("z", "1:1"), ("r", "rotate"), ("1-9", "bin"), ("esc", "back")]);
             }
         } else {
             let binned_view = (1..=WORKSPACES).contains(&session.active());
@@ -569,6 +586,10 @@ impl App {
             item.set_failed(true);
             return;
         };
+        // Thumbnails come from the file; a pending rotation goes on top.
+        let turns = self.session.borrow().image(id).rotation;
+        let texture = if turns == 0 { texture } else { crate::quick::rotate(&texture, turns) };
+        item.set_turns(turns as u32);
         self.preview.offer_placeholder(id, &texture);
         if item.texture().is_none() {
             self.thumb_order.borrow_mut().push_back(id);
@@ -662,6 +683,31 @@ impl App {
             self.say(&format!("{} images {place}", marked.len()), false);
         }
         self.hovered.set(None);
+        self.sync();
+    }
+
+    /// Session-only, like binning; "Save rotations" writes it to the files.
+    fn rotate(self: &Rc<Self>, quarters: i8) {
+        let session = self.session.borrow();
+        let (jpegs, others): (Vec<ImageId>, Vec<ImageId>) =
+            session.marked().into_iter().partition(|&id| crate::cli::is_jpeg(&session.image(id).path));
+        drop(session);
+        if !others.is_empty() {
+            self.say("only JPEGs can be rotated", true);
+        }
+        if !jpegs.is_empty() {
+            self.session.borrow_mut().rotate(&jpegs, quarters);
+            self.sync();
+        }
+    }
+
+    /// A command wrote these rotations to disk: what is on screen is now
+    /// simply what the files look like.
+    fn rotations_saved(self: &Rc<Self>, ids: &[ImageId]) {
+        for &id in ids {
+            self.session.borrow_mut().rotation_saved(id);
+            self.items[id].set_turns(0);
+        }
         self.sync();
     }
 
@@ -798,6 +844,8 @@ impl App {
             (Key::question, _) => self.palette.open_help(),
             (Key::q, _) => self.window.close(),
             (Key::s, _) => self.toggle_sort(),
+            (Key::r, _) => self.rotate(1),
+            (Key::R, _) => self.rotate(-1),
             (Key::n, _) => self.jump_to_binned(true),
             (Key::N, _) => self.jump_to_binned(false),
             (Key::a, _) => self.toggle_advance(),
