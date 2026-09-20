@@ -56,6 +56,13 @@ gridview.grid > child:drop(active) {
   background: @om_accent;
 }
 
+.mark {
+  margin: 2px;
+  padding: 0 5px;
+  color: @om_accent;
+  background: alpha(@om_background, 0.85);
+}
+
 .name { padding-top: 3px; color: @om_muted; font-size: 8pt; }
 gridview.grid > child:selected .name { color: @om_foreground; }
 
@@ -78,6 +85,7 @@ gridview.grid > child:selected .name { color: @om_foreground; }
   color: @om_muted;
 }
 .status .ws { padding: 0 6px; }
+.status .ws.marked { color: @om_accent; }
 .status .ws.active { color: @om_background; background: @om_accent; font-weight: bold; }
 .status .info.manual { color: @om_foreground; }
 .status .message { color: @om_foreground; }

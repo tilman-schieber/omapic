@@ -30,9 +30,16 @@ pub fn factory(app: &Rc<App>) -> gtk::SignalListItemFactory {
             .valign(gtk::Align::Start)
             .css_classes(["badge"])
             .build();
+        let mark = gtk::Label::builder()
+            .label("●")
+            .halign(gtk::Align::Start)
+            .valign(gtk::Align::Start)
+            .css_classes(["mark"])
+            .build();
         let broken = gtk::Label::builder().label("unreadable").css_classes(["broken"]).build();
         let image = gtk::Overlay::builder().child(&picture).build();
         image.add_overlay(&badge);
+        image.add_overlay(&mark);
         image.add_overlay(&broken);
         let frame = gtk::AspectFrame::builder()
             .child(&image)
@@ -64,6 +71,7 @@ pub fn factory(app: &Rc<App>) -> gtk::SignalListItemFactory {
         let item = list_item.property_expression("item");
         item.chain_property::<ImageItem>("texture").bind(&picture, "paintable", gtk::Widget::NONE);
         item.chain_property::<ImageItem>("failed").bind(&broken, "visible", gtk::Widget::NONE);
+        item.chain_property::<ImageItem>("mark").bind(&mark, "visible", gtk::Widget::NONE);
         item.chain_property::<ImageItem>("name").bind(&name, "label", gtk::Widget::NONE);
         let workspace = item.chain_property::<ImageItem>("workspace");
         workspace

@@ -15,6 +15,8 @@ pub fn bin_label(workspace: u8) -> String {
 }
 /// View showing the images that are in no workspace yet.
 pub const UNBINNED: u8 = WORKSPACES + 1;
+/// View showing the marked images — the one non-exclusive set.
+pub const MARKED: u8 = WORKSPACES + 2;
 
 #[derive(Debug, Clone)]
 pub struct ImageEntry {
@@ -22,6 +24,8 @@ pub struct ImageEntry {
     pub workspace: Option<u8>,
     /// Quarter turns clockwise, shown but not yet written to the file.
     pub rotation: u8,
+    /// Marked: a flag independent of the workspace, for picking across them.
+    pub mark: bool,
     /// The file is gone (trashed by a command); ids stay stable, the entry hides.
     pub removed: bool,
 }
@@ -40,6 +44,7 @@ pub struct Workspace {
 #[derive(Debug, Clone)]
 struct Snapshot {
     workspaces: Vec<Option<u8>>,
+    marks: Vec<bool>,
     rotations: Vec<u8>,
     views: Vec<Workspace>,
     active: u8,
@@ -66,12 +71,12 @@ impl Session {
     pub fn new(paths: Vec<PathBuf>) -> Self {
         let images: Vec<ImageEntry> = paths
             .into_iter()
-            .map(|path| ImageEntry { path, workspace: None, rotation: 0, removed: false })
+            .map(|path| ImageEntry { path, workspace: None, rotation: 0, mark: false, removed: false })
             .collect();
         Session {
             natural: (0..images.len()).collect(),
             images,
-            views: vec![Workspace::default(); UNBINNED as usize + 1],
+            views: vec![Workspace::default(); MARKED as usize + 1],
             active: 0,
             selected: None,
             anchor: None,
@@ -83,6 +88,7 @@ impl Session {
     fn snapshot(&self) -> Snapshot {
         Snapshot {
             workspaces: self.images.iter().map(|e| e.workspace).collect(),
+            marks: self.images.iter().map(|e| e.mark).collect(),
             rotations: self.images.iter().map(|e| e.rotation).collect(),
             views: self.views.clone(),
             active: self.active,
@@ -93,6 +99,9 @@ impl Session {
     fn restore(&mut self, snapshot: Snapshot) {
         for (entry, workspace) in self.images.iter_mut().zip(snapshot.workspaces) {
             entry.workspace = workspace;
+        }
+        for (entry, mark) in self.images.iter_mut().zip(snapshot.marks) {
+            entry.mark = mark;
         }
         for (entry, rotation) in self.images.iter_mut().zip(snapshot.rotations) {
             entry.rotation = rotation;
@@ -158,6 +167,10 @@ impl Session {
         self.images.iter().filter(|e| !e.removed && e.workspace == Some(ws)).count()
     }
 
+    pub fn mark_count(&self) -> usize {
+        self.images.iter().filter(|e| !e.removed && e.mark).count()
+    }
+
     pub fn unbinned_count(&self) -> usize {
         self.images.iter().filter(|e| !e.removed && e.workspace.is_none()).count()
     }
@@ -169,6 +182,7 @@ impl Session {
         match view {
             0 => true,
             UNBINNED => self.images[id].workspace.is_none(),
+            MARKED => self.images[id].mark,
             _ => self.images[id].workspace == Some(view),
         }
     }
@@ -214,7 +228,7 @@ impl Session {
 
     /// Switch the filter. Keeps the selection if still visible, else selects the first image.
     pub fn set_active(&mut self, view: u8) {
-        if view > UNBINNED {
+        if view > MARKED {
             return;
         }
         self.active = view;
@@ -290,7 +304,7 @@ impl Session {
 
     /// The images actions apply to, in display order: the range between
     /// anchor and selection, or just the selected image.
-    pub fn marked(&self) -> Vec<ImageId> {
+    pub fn selection(&self) -> Vec<ImageId> {
         let Some(selected) = self.selected else { return Vec::new() };
         let visible = self.visible();
         let position = |id| visible.iter().position(|&x| x == id);
@@ -310,14 +324,14 @@ impl Session {
     /// Bin keys toggle: what pressing the key of `ws` should do to the marked
     /// images — take them out if every one is in there already, else put them in.
     pub fn toggle_target(&self, ws: u8) -> Option<u8> {
-        let marked = self.marked();
+        let marked = self.selection();
         let all_in = !marked.is_empty() && marked.iter().all(|&id| self.images[id].workspace == Some(ws));
         (!all_in).then_some(ws)
     }
 
     /// Assign everything marked, as a single undo step. Ends the range.
-    pub fn assign_marked(&mut self, ws: Option<u8>) {
-        let marked = self.marked();
+    pub fn assign_selection(&mut self, ws: Option<u8>) {
+        let marked = self.selection();
         self.assign_many(&marked, ws);
         self.anchor = None;
     }
@@ -344,12 +358,39 @@ impl Session {
                 }
             }
         }
+        self.reselect(&before, &ids);
+    }
+
+    /// If the selected image just left the view (`before`: the view as it
+    /// was, `changed`: what was touched), whatever followed slides into place.
+    fn reselect(&mut self, before: &[ImageId], changed: &[ImageId]) {
         if self.selected.is_some_and(|id| !self.in_view(self.active, id)) {
-            // Whatever followed the departed images slides into their place.
             let after = self.visible();
-            let first = before.iter().position(|id| ids.contains(id)).unwrap_or(0);
+            let first = before.iter().position(|id| changed.contains(id)).unwrap_or(0);
             self.selected = after.get(first).or(after.last()).copied();
         }
+    }
+
+    /// Toggle the mark of the selection: off if all of it is marked, else on.
+    /// Marks don't touch workspaces. One undo step; ends a range.
+    pub fn toggle_mark(&mut self) {
+        let ids = self.selection();
+        if ids.is_empty() {
+            return;
+        }
+        let mark = !ids.iter().all(|&id| self.images[id].mark);
+        self.checkpoint(self.snapshot());
+        let before = self.visible();
+        for &id in &ids {
+            self.images[id].mark = mark;
+            let order = &mut self.views[MARKED as usize].explicit_order;
+            order.retain(|&x| x != id);
+            if mark {
+                order.push(id);
+            }
+        }
+        self.anchor = None;
+        self.reselect(&before, &ids);
     }
 
     pub fn toggle_manual_sort(&mut self) -> bool {
@@ -410,7 +451,7 @@ impl Session {
         let first = self.images.len();
         for path in paths {
             self.natural.push(self.images.len());
-            self.images.push(ImageEntry { path, workspace: None, rotation: 0, removed: false });
+            self.images.push(ImageEntry { path, workspace: None, rotation: 0, mark: false, removed: false });
         }
         (first..self.images.len()).collect()
     }
@@ -467,21 +508,48 @@ mod tests {
     }
 
     #[test]
+    fn marks_are_independent_of_workspaces() {
+        let mut s = session(5);
+        s.assign(1, Some(1));
+        s.assign(3, Some(2));
+        s.select_range(1, 3);
+        s.toggle_mark(); // 1, 2, 3 — across two bins and an unbinned image
+        assert_eq!(s.mark_count(), 3);
+        assert_eq!((s.image(1).workspace, s.image(3).workspace), (Some(1), Some(2)));
+        s.select_range(3, 4);
+        s.toggle_mark(); // mixed: the rest gets marked too
+        assert_eq!(s.view_order(MARKED), vec![1, 2, 3, 4]);
+
+        s.set_active(MARKED);
+        s.select(Some(2));
+        s.toggle_mark(); // unmarked in its own view: gone, the next one is up
+        assert_eq!(s.visible(), vec![1, 3, 4]);
+        assert_eq!(s.selected(), Some(3));
+        s.assign_selection(Some(7)); // binning here changes nothing about the mark
+        assert_eq!(s.visible(), vec![1, 3, 4]);
+
+        s.move_to(4, 0); // the marked view has its own order
+        assert_eq!(s.visible(), vec![4, 1, 3]);
+        assert!(s.undo() && s.undo() && s.undo());
+        assert_eq!(s.view_order(MARKED), vec![1, 2, 3, 4]);
+    }
+
+    #[test]
     fn bin_keys_toggle() {
         let mut s = session(3);
         s.select(Some(0));
         assert_eq!(s.toggle_target(1), Some(1));
-        s.assign_marked(s.toggle_target(1));
+        s.assign_selection(s.toggle_target(1));
         assert_eq!(s.toggle_target(2), Some(2)); // another bin: move there
         assert_eq!(s.toggle_target(1), None); // its own bin: out
-        s.assign_marked(s.toggle_target(1));
+        s.assign_selection(s.toggle_target(1));
         assert_eq!(s.image(0).workspace, None);
 
         // A range goes out only if all of it is in; otherwise the rest joins.
         s.assign(1, Some(4));
         s.select_range(0, 1);
         assert_eq!(s.toggle_target(4), Some(4));
-        s.assign_marked(Some(4));
+        s.assign_selection(Some(4));
         s.select_range(0, 1);
         assert_eq!(s.toggle_target(4), None);
     }
@@ -557,11 +625,11 @@ mod tests {
         s.set_active(UNBINNED);
         assert_eq!(s.visible(), vec![0, 2, 3]);
         assert_eq!(s.unbinned_count(), 3);
-        s.assign_marked(Some(1)); // image 0 goes, the next one is up
+        s.assign_selection(Some(1)); // image 0 goes, the next one is up
         assert_eq!(s.visible(), vec![2, 3]);
         assert_eq!(s.selected(), Some(2));
         s.set_active(2);
-        s.assign_marked(None); // and back onto the pile
+        s.assign_selection(None); // and back onto the pile
         assert_eq!(s.unbinned_count(), 3);
     }
 
@@ -667,17 +735,17 @@ mod tests {
     fn range_assignment() {
         let mut s = session(6);
         s.select(Some(4));
-        assert_eq!(s.marked(), vec![4]);
+        assert_eq!(s.selection(), vec![4]);
         s.toggle_range();
         s.select(Some(2)); // ranges work backwards too
-        assert_eq!(s.marked(), vec![2, 3, 4]);
-        s.assign_marked(Some(1));
+        assert_eq!(s.selection(), vec![2, 3, 4]);
+        s.assign_selection(Some(1));
         assert!(!s.has_range());
         assert_eq!(s.view_order(1), vec![2, 3, 4]);
 
         s.set_active(1);
         s.select_range(2, 3);
-        s.assign_marked(Some(2));
+        s.assign_selection(Some(2));
         assert_eq!(s.visible(), vec![4]);
         assert_eq!(s.selected(), Some(4));
 

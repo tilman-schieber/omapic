@@ -17,7 +17,7 @@ use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
 
 use crate::cli::{Input, SortKey, file_name};
-use crate::model::{ImageId, Session, UNBINNED, WORKSPACES, bin_label};
+use crate::model::{ImageId, MARKED, Session, UNBINNED, WORKSPACES, bin_label};
 use crate::theme::{self, Theme};
 use crate::thumbs::{Thumbnail, Thumbnailer};
 use item::ImageItem;
@@ -35,10 +35,12 @@ const HELP: &str = "\
 <b>r</b>  <b>R</b>               rotate right / left (in the session; save via <b>:</b>)
 <b>z</b>                  actual pixels at the pointer; drag or shift+arrows / H J K L pan
 <b>1</b> … <b>9</b>  <b>0</b>           put image into that workspace; same key again takes it out
-<b>v</b>                  mark a range (also shift-click), then bin it in one go
+<b>m</b>                  mark / unmark — independent of the workspaces
+<b>v</b>                  select a range (also shift-click) to bin or mark in one go
 <b>a</b>                  auto-advance: binning moves on to the next image
 <b>alt+1</b> … <b>alt+0</b>      show only that workspace
 <b>alt+a</b>  <b>esc</b>         show all images
+<b>alt+m</b>              show the marked images
 <b>alt+u</b>  <b>alt+`</b>       show what is not binned yet
 <b>s</b>                  manual sorting on / off
 <b>o</b>                  order by: natural → date taken → modified → size → name
@@ -397,6 +399,9 @@ impl App {
             if item.workspace() != ws {
                 item.set_workspace(ws);
             }
+            if item.mark() != entry.mark {
+                item.set_mark(entry.mark);
+            }
             // Rotated, or a rotation undone: turn the thumbnail to match.
             let (shown, wanted) = (item.turns() as u8 % 4, entry.rotation);
             if shown != wanted {
@@ -413,7 +418,7 @@ impl App {
         self.syncing.set(true);
         let marked: Vec<usize> = {
             let (session, view) = (self.session.borrow(), self.view.borrow());
-            session.marked().iter().filter_map(|id| view.iter().position(|x| x == id)).collect()
+            session.selection().iter().filter_map(|id| view.iter().position(|x| x == id)).collect()
         };
         self.selection.unselect_all();
         if let (Some(&first), Some(&last)) = (marked.iter().min(), marked.iter().max()) {
@@ -491,6 +496,14 @@ impl App {
             }
             self.strip.append(&label);
         }
+        let marked = session.mark_count();
+        if marked > 0 || session.active() == MARKED {
+            let label = gtk::Label::builder().label(format!("● {marked}")).css_classes(["ws", "marked"]).build();
+            if session.active() == MARKED {
+                label.add_css_class("active");
+            }
+            self.strip.append(&label);
+        }
         let unbinned = session.unbinned_count();
         if session.active() == UNBINNED || (unbinned > 0 && unbinned < session.len()) {
             let label = gtk::Label::builder().label(format!("unbinned {unbinned}")).css_classes(["ws"]).build();
@@ -528,11 +541,11 @@ impl App {
         if session.pending_rotations() > 0 {
             hints.push((":", "save rotations"));
         }
-        let marked = session.marked().len();
+        let marked = session.selection().len();
         let count = format!("bin {marked} images");
         let unbin_key;
         if session.has_range() {
-            hints.extend([("0-9", count.as_str()), ("same key", "unbin"), ("v esc", "end range")]);
+            hints.extend([("0-9", count.as_str()), ("same key", "unbin"), ("m", "mark"), ("v esc", "end range")]);
         } else if self.view.borrow().is_empty() {
             if in_workspace {
                 hints.push(("esc", "all images"));
@@ -550,6 +563,8 @@ impl App {
                 unbin_key = bin_label(ws);
                 hints.push((unbin_key.as_str(), "unbin"));
             }
+            let is_marked = session.selected().is_some_and(|id| session.image(id).mark);
+            hints.push(("m", if is_marked { "unmark" } else { "mark" }));
             if session.manual_sort() {
                 hints.extend([("H L", "reorder"), ("s", "unsort")]);
             } else if in_workspace {
@@ -558,7 +573,7 @@ impl App {
             if in_workspace {
                 hints.extend([("esc", "all"), (":", "actions")]);
             } else {
-                hints.extend([("alt+0-9", "show bin"), ("alt+u", "unbinned"), ("enter", "enlarge"), (":", "commands")]);
+                hints.extend([("alt+0-9", "show bin"), ("alt+m", "marked"), ("enter", "enlarge"), (":", "commands")]);
             }
         }
         let markup: Vec<String> = hints
@@ -716,12 +731,12 @@ impl App {
     }
 
     fn assign(self: &Rc<Self>, workspace: Option<u8>) {
-        let marked = self.session.borrow().marked();
+        let marked = self.session.borrow().selection();
         let Some(&last) = marked.last() else { return };
         let after = self.view.borrow().iter().position(|&x| x == last).map(|p| p + 1);
         let next = after.and_then(|p| self.view.borrow().get(p).copied());
         let mut session = self.session.borrow_mut();
-        session.assign_marked(workspace);
+        session.assign_selection(workspace);
         // If the images left the view, the next one already slid into place.
         let still_here = session.selected().is_some_and(|id| marked.contains(&id));
         if self.advance.get() && workspace.is_some() && still_here && next.is_some() {
@@ -740,7 +755,7 @@ impl App {
     fn rotate(self: &Rc<Self>, quarters: i8) {
         let session = self.session.borrow();
         let (jpegs, others): (Vec<ImageId>, Vec<ImageId>) =
-            session.marked().into_iter().partition(|&id| crate::cli::is_jpeg(&session.image(id).path));
+            session.selection().into_iter().partition(|&id| crate::cli::is_jpeg(&session.image(id).path));
         drop(session);
         if !others.is_empty() {
             self.say("only JPEGs can be rotated", true);
@@ -816,7 +831,7 @@ impl App {
     /// Copy paths to the clipboard: the marked images, or everything shown.
     fn yank(self: &Rc<Self>, everything: bool) {
         let session = self.session.borrow();
-        let ids = if everything { self.view.borrow().clone() } else { session.marked() };
+        let ids = if everything { self.view.borrow().clone() } else { session.selection() };
         let paths: Vec<String> = ids.iter().map(|&id| session.image(id).path.display().to_string()).collect();
         drop(session);
         if paths.is_empty() {
@@ -839,6 +854,13 @@ impl App {
             }
             None => self.say("no other binned image here", false),
         }
+    }
+
+    /// `m`: the one non-exclusive set, on top of whatever bin an image is in.
+    fn toggle_mark(self: &Rc<Self>) {
+        self.session.borrow_mut().toggle_mark();
+        self.hovered.set(None);
+        self.sync();
     }
 
     fn toggle_range(self: &Rc<Self>) {
@@ -1019,6 +1041,7 @@ impl App {
             // The 0 key is the tenth workspace.
             (_, Some(d)) if alt && !ctrl => self.show_workspace(if d == 0 { 10 } else { d }),
             (Key::a, _) if alt && !ctrl => self.show_workspace(0),
+            (Key::m, _) if alt && !ctrl => self.show_workspace(MARKED),
             (Key::u | Key::grave | Key::dead_grave, _) if alt && !ctrl => self.show_workspace(UNBINNED),
             (_, Some(d)) if !ctrl => self.toggle_bin(if d == 0 { 10 } else { d }),
             (Key::k, _) if ctrl => self.palette.open_commands(),
@@ -1039,6 +1062,7 @@ impl App {
             (Key::n, _) => self.jump_to_binned(true),
             (Key::N, _) => self.jump_to_binned(false),
             (Key::a, _) => self.toggle_advance(),
+            (Key::m, _) => self.toggle_mark(),
             (Key::v, _) => self.toggle_range(),
             (Key::Escape, _) if self.session.borrow().has_range() => self.toggle_range(),
             (Key::u, _) => self.undo(false),
@@ -1087,6 +1111,7 @@ impl App {
         match self.session.borrow().active() {
             0 => "all images".into(),
             UNBINNED => "unbinned images".into(),
+            MARKED => "marked images".into(),
             n => format!("workspace {}", bin_label(n)),
         }
     }

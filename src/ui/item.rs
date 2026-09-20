@@ -20,6 +20,8 @@ mod imp {
         /// 0 = unassigned.
         #[property(get, set)]
         workspace: Cell<u32>,
+        #[property(get, set)]
+        mark: Cell<bool>,
         #[property(get, set, nullable)]
         texture: RefCell<Option<gdk::Texture>>,
         /// Quarter turns of pending rotation baked into `texture`.

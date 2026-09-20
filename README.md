@@ -64,9 +64,11 @@ always hints at the keys that matter in the current context; `?` shows all.
 | `r` / `R` | rotate right / left — in the session only, until saved from the palette |
 | `z` | actual pixels at the pointer; drag or `Shift`+arrows / `H J K L` to pan; the position is kept from image to image |
 | `1` … `9`, `0` | put the selected image into that workspace; the same key again takes it out |
-| `v`, shift-click | mark a range; a workspace key then applies to all of it (one undo step) |
+| `m` | mark / unmark — a flag independent of the workspaces |
+| `v`, shift-click | select a range; a workspace key or `m` then applies to all of it (one undo step) |
 | `a` | auto-advance on/off: binning moves on to the next image |
 | `Alt+1` … `Alt+9`, `Alt+0` | show only that workspace |
+| `Alt+M` | show only the marked images |
 | `Alt+A`, `Esc` | show all images |
 | `Alt+U`, ``Alt+` `` | show only what isn't binned yet — a worklist that empties as you go |
 | `o` | order unsorted views by: natural → date taken → date modified → size → name |
@@ -90,7 +92,14 @@ it, and it leaves the current view immediately if that view no longer
 matches. Tagged thumbnails carry a numbered badge, and the status line lists
 the non-empty bins with their counts.
 
-Every view (each bin, and "all") is either in natural order — the order the
+On top of the bins there is one non-exclusive set: **marks** (`m`, shown as
+a dot on the thumbnail). A mark doesn't care which bin an image is in, so it
+serves for "the best across all bins" and as a hand-picked selection: show
+the marked images with `Alt+M` and every command acts on exactly those, in
+an order of their own if you arrange them. There is deliberately only one
+such flag — no ratings, colours or tags.
+
+Every view (each bin, the marked images, and "all") is either in natural order — the order the
 images were given or found, natural-sorted by name — or sorted by hand.
 Reordering turns manual sorting on; `s` switches back to natural order and
 remembers your arrangement in case you return. Reordering never renames
