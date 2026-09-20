@@ -33,6 +33,12 @@ GIF and TIFF are loaded through gdk-pixbuf/glycin, which GTK4 already pulls in.
     omapic DIR           # images of DIR
     omapic *.jpg …       # exactly the given files, in the given order
 
+With `--print` (or `--print0`), omapic writes the paths of the images shown
+at the moment you quit to stdout, in display order — so a bin can be handed
+to the shell without touching anything:
+
+    omapic --print *.jpg | xargs -d '\n' cp -t picked/    # quit while showing bin 1
+
 Hover or move the selection to preview. The right end of the status line
 always hints at the keys that matter in the current context; `?` shows all.
 
@@ -57,6 +63,7 @@ always hints at the keys that matter in the current context; `?` shows all.
 | `Shift+←` `Shift+→`, `H` `L` | move the image backward / forward |
 | drag a thumbnail | reorder |
 | `u` / `U`, `Ctrl+R` | undo / redo binning, ordering, rotating and sort toggles (never file operations) |
+| `y` / `Y` | copy the path of the selected image(s) / of everything shown to the clipboard (paste while omapic is open, unless a clipboard manager keeps it) |
 | `f` | file names under thumbnails |
 | `:` or `Ctrl+K` | command palette |
 | `?` | key sheet |

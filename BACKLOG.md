@@ -6,9 +6,6 @@ or it is one more explicit action on a bin.
 
 ## Actions
 
-- **Yank paths** — `y` copies the selected/visible paths to the clipboard;
-  `omapic --print` writes the shown bin's paths to stdout on quit, so omapic
-  composes with the shell (`omapic *.jpg --print | xargs …`).
 - **Run a shell command on the workspace** — `:!` with `{}` substitution
   (`mogrify -resize 50% {}`), confirmed like every other file operation.
 

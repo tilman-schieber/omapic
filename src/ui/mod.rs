@@ -45,6 +45,7 @@ const HELP: &str = "\
 <b>shift+←→</b>  <b>H L</b>      move image backward / forward
 <b>drag</b>               reorder thumbnails
 <b>u</b>  <b>U</b> / <b>ctrl+r</b>      undo / redo binning, ordering, rotating
+<b>y</b>  <b>Y</b>               copy path of the image(s) / of everything shown
 <b>f</b>                  file names under thumbnails
 <b>:</b>  <b>ctrl+k</b>          commands
 <b>?</b>                  this sheet
@@ -83,7 +84,8 @@ pub struct App {
     theme_monitor: RefCell<Option<gio::FileMonitor>>,
 }
 
-pub fn build(application: &gtk::Application, input: Input) {
+/// `print`: on quit, write the shown images' paths to stdout with this terminator.
+pub fn build(application: &gtk::Application, input: Input, print: Option<char>) {
     let display = gdk::Display::default().expect("no display");
     let scale = display
         .monitors()
@@ -214,6 +216,19 @@ pub fn build(application: &gtk::Application, input: Input) {
 
     if app.items.is_empty() {
         app.say("no images found", true);
+    }
+    if let Some(terminator) = print {
+        let weak = Rc::downgrade(&app);
+        app.window.connect_close_request(move |_| {
+            if let Some(app) = weak.upgrade() {
+                use std::io::Write;
+                let mut out = std::io::stdout().lock();
+                for (_, path) in app.visible_files() {
+                    let _ = write!(out, "{}{terminator}", path.display());
+                }
+            }
+            glib::Propagation::Proceed
+        });
     }
     app.window.present();
     app.grid.grab_focus();
@@ -711,6 +726,20 @@ impl App {
         self.sync();
     }
 
+    /// Copy paths to the clipboard: the marked images, or everything shown.
+    fn yank(self: &Rc<Self>, everything: bool) {
+        let session = self.session.borrow();
+        let ids = if everything { self.view.borrow().clone() } else { session.marked() };
+        let paths: Vec<String> = ids.iter().map(|&id| session.image(id).path.display().to_string()).collect();
+        drop(session);
+        if paths.is_empty() {
+            return;
+        }
+        self.window.clipboard().set_text(&paths.join("\n"));
+        let what = if paths.len() == 1 { "path".to_string() } else { format!("{} paths", paths.len()) };
+        self.say(&format!("{what} copied to the clipboard"), false);
+    }
+
     fn jump_to_binned(self: &Rc<Self>, forward: bool) {
         let next = self.session.borrow().next_binned(forward);
         match next {
@@ -844,6 +873,8 @@ impl App {
             (Key::question, _) => self.palette.open_help(),
             (Key::q, _) => self.window.close(),
             (Key::s, _) => self.toggle_sort(),
+            (Key::y, _) => self.yank(false),
+            (Key::Y, _) => self.yank(true),
             (Key::r, _) => self.rotate(1),
             (Key::R, _) => self.rotate(-1),
             (Key::n, _) => self.jump_to_binned(true),
