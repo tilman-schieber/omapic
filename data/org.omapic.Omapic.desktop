@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=omapic
+GenericName=Image Viewer
+Comment=Keyboard-driven image viewer and temporary organizer
+Exec=omapic %F
+Icon=org.omapic.Omapic
+Terminal=false
+Categories=Graphics;Viewer;2DGraphics;RasterGraphics;GTK;
+Keywords=image;photo;picture;viewer;sort;cull;contact sheet;
+MimeType=image/jpeg;image/png;image/webp;image/gif;image/tiff;
+StartupNotify=true
+StartupWMClass=org.omapic.Omapic

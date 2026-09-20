@@ -1,0 +1,47 @@
+# Maintainer: Tilman Schieber <tilman.schieber@gmail.com>
+pkgname=omapic-git
+pkgver=r0
+pkgrel=1
+pkgdesc="Keyboard-driven image viewer and temporary organizer for Omarchy (GTK4)"
+arch=('x86_64' 'aarch64')
+url="https://github.com/tilman-schieber/omapic"
+license=('MIT')
+depends=('gtk4' 'gdk-pixbuf2' 'glib2' 'libjpeg-turbo' 'hicolor-icon-theme')
+makedepends=('cargo' 'git')
+optdepends=('imagemagick: contact sheets and the suggested shell commands')
+provides=('omapic')
+conflicts=('omapic')
+source=("omapic::git+$url.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd omapic
+  printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+prepare() {
+  cd omapic
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd omapic
+  export RUSTUP_TOOLCHAIN=stable CARGO_TARGET_DIR=target
+  cargo build --frozen --release
+}
+
+check() {
+  cd omapic
+  export RUSTUP_TOOLCHAIN=stable CARGO_TARGET_DIR=target
+  cargo test --frozen --release
+}
+
+package() {
+  cd omapic
+  install -Dm755 target/release/omapic "$pkgdir/usr/bin/omapic"
+  install -Dm644 data/org.omapic.Omapic.desktop "$pkgdir/usr/share/applications/org.omapic.Omapic.desktop"
+  install -Dm644 data/org.omapic.Omapic.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/org.omapic.Omapic.svg"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}

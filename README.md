@@ -23,6 +23,16 @@ confirm it.
     cd omapic
     cargo install --path .        # → ~/.cargo/bin/omapic
 
+Or as a package, which also installs the desktop entry ("Open with omapic"
+in file managers) and icon:
+
+    cd pkg && makepkg -si
+
+Without the package, the desktop entry can be installed by hand:
+
+    install -Dm644 data/org.omapic.Omapic.desktop -t ~/.local/share/applications/
+    install -Dm644 data/org.omapic.Omapic.svg -t ~/.local/share/icons/hicolor/scalable/apps/
+
 ImageMagick (`magick`) is only needed for contact sheets. Animated GIFs play in
 the preview. JPEG, PNG, WebP,
 GIF and TIFF are loaded through gdk-pixbuf/glycin, which GTK4 already pulls in.
