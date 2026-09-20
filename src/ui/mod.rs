@@ -34,6 +34,7 @@ const HELP: &str = "\
 <b>z</b>                  actual pixels at the pointer; drag to pan
 <b>1</b> … <b>9</b>              put image into workspace
 <b>0</b>                  take image out of its workspace
+<b>a</b>                  auto-advance: binning moves on to the next image
 <b>alt+1</b> … <b>alt+9</b>      show only that workspace
 <b>alt+0</b>              show all images
 <b>s</b>                  manual sorting on / off
@@ -68,6 +69,8 @@ pub struct App {
     view: RefCell<Vec<ImageId>>,
     hovered: Cell<Option<ImageId>>,
     show_names: Cell<bool>,
+    /// After binning an image, move on to the next one.
+    advance: Cell<bool>,
     /// The file name label of every grid cell built so far.
     name_labels: RefCell<Vec<glib::WeakRef<gtk::Label>>>,
     enlarged: Cell<bool>,
@@ -187,6 +190,7 @@ pub fn build(application: &gtk::Application, input: Input) {
         view: RefCell::default(),
         hovered: Cell::new(None),
         show_names: Cell::new(false),
+        advance: Cell::new(false),
         name_labels: RefCell::default(),
         enlarged: Cell::new(false),
         syncing: Cell::new(false),
@@ -421,7 +425,8 @@ impl App {
         }
         let position = self.selected_position().map_or(0, |p| p + 1);
         let sort = if session.manual_sort() { "manual" } else { "natural" };
-        self.info.set_label(&format!("{position}/{}  ·  {sort}", self.view.borrow().len()));
+        let advance = if self.advance.get() { "  ·  bin→next" } else { "" };
+        self.info.set_label(&format!("{position}/{}  ·  {sort}{advance}", self.view.borrow().len()));
         if session.manual_sort() {
             self.info.add_css_class("manual");
         } else {
@@ -608,8 +613,21 @@ impl App {
     fn assign(self: &Rc<Self>, workspace: Option<u8>) {
         let Some(id) = self.session.borrow().selected() else { return };
         self.session.borrow_mut().assign(id, workspace);
+        // If the image left the view, the next one already slid into place.
+        let still_here = self.session.borrow().selected() == Some(id);
+        if self.advance.get() && workspace.is_some() && still_here {
+            let next = self.selected_position().and_then(|p| self.view.borrow().get(p + 1).copied());
+            if next.is_some() {
+                self.session.borrow_mut().select(next);
+            }
+        }
         self.hovered.set(None);
         self.sync();
+    }
+
+    fn toggle_advance(self: &Rc<Self>) {
+        self.advance.set(!self.advance.get());
+        self.update_status();
     }
 
     fn show_workspace(self: &Rc<Self>, view: u8) {
@@ -720,6 +738,7 @@ impl App {
             (Key::question, _) => self.palette.open_help(),
             (Key::q, _) => self.window.close(),
             (Key::s, _) => self.toggle_sort(),
+            (Key::a, _) => self.toggle_advance(),
             (Key::u, _) => self.undo(false),
             (Key::U, _) => self.undo(true),
             (Key::f, _) => self.toggle_names(),

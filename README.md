@@ -46,6 +46,7 @@ always hints at the keys that matter in the current context; `?` shows all.
 | `z` | actual pixels at the pointer; drag to pan, position is kept from image to image |
 | `1` … `9` | put the selected image into that workspace |
 | `0` | take it out of its workspace |
+| `a` | auto-advance on/off: binning moves on to the next image |
 | `Alt+1` … `Alt+9` | show only that workspace |
 | `Alt+0` | show all images |
 | `s` | manual sorting on / off for the current view |
