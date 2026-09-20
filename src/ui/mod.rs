@@ -30,6 +30,7 @@ const THUMB_CACHE: usize = 1200;
 const HELP: &str = "\
 <b>←↓↑→</b>  <b>h j k l</b>      move around the grid
 <b>home end</b>  <b>g G</b>      first / last image
+<b>n</b>  <b>N</b>               next / previous binned image
 <b>enter</b>  <b>space</b>       enlarge preview
 <b>z</b>                  actual pixels at the pointer; drag to pan
 <b>1</b> … <b>9</b>              put image into workspace
@@ -45,7 +46,7 @@ const HELP: &str = "\
 <b>u</b>  <b>U</b> / <b>ctrl+r</b>      undo / redo binning and ordering
 <b>f</b>                  file names under thumbnails
 <b>:</b>  <b>ctrl+k</b>          commands
-<b>?</b>                  this sheet (the status line hints at keys for the current context)
+<b>?</b>                  this sheet
 <b>q</b>                  quit";
 
 pub struct App {
@@ -664,6 +665,18 @@ impl App {
         self.sync();
     }
 
+    fn jump_to_binned(self: &Rc<Self>, forward: bool) {
+        let next = self.session.borrow().next_binned(forward);
+        match next {
+            Some(id) => {
+                self.session.borrow_mut().select(Some(id));
+                self.hovered.set(None);
+                self.sync();
+            }
+            None => self.say("no other binned image here", false),
+        }
+    }
+
     fn toggle_range(self: &Rc<Self>) {
         self.session.borrow_mut().toggle_range();
         self.sync();
@@ -785,6 +798,8 @@ impl App {
             (Key::question, _) => self.palette.open_help(),
             (Key::q, _) => self.window.close(),
             (Key::s, _) => self.toggle_sort(),
+            (Key::n, _) => self.jump_to_binned(true),
+            (Key::N, _) => self.jump_to_binned(false),
             (Key::a, _) => self.toggle_advance(),
             (Key::v, _) => self.toggle_range(),
             (Key::Escape, _) if self.session.borrow().has_range() => self.toggle_range(),

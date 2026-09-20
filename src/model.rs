@@ -188,6 +188,19 @@ impl Session {
         }
     }
 
+    /// The next (or previous) binned image in the active view, wrapping around.
+    pub fn next_binned(&self, forward: bool) -> Option<ImageId> {
+        let visible = self.visible();
+        let len = visible.len();
+        let start = self.selected.and_then(|id| visible.iter().position(|&x| x == id));
+        // Without a selection, start just outside so the first/last image counts.
+        let start = start.unwrap_or(if forward { len.saturating_sub(1) } else { 0 });
+        (1..=len)
+            .map(|step| if forward { (start + step) % len } else { (start + len - step % len) % len })
+            .map(|position| visible[position])
+            .find(|&id| self.images[id].workspace.is_some() && Some(id) != self.selected)
+    }
+
     /// Start a range at the selected image, or drop the current one.
     pub fn toggle_range(&mut self) {
         self.anchor = if self.anchor.is_some() { None } else { self.selected };
@@ -424,6 +437,25 @@ mod tests {
         s.set_active(2);
         s.assign_marked(None); // and back onto the pile
         assert_eq!(s.unbinned_count(), 3);
+    }
+
+    #[test]
+    fn jumping_between_binned_images() {
+        let mut s = session(6);
+        s.select(Some(0));
+        assert_eq!(s.next_binned(true), None);
+        s.assign(1, Some(1));
+        s.assign(4, Some(2));
+        assert_eq!(s.next_binned(true), Some(1));
+        assert_eq!(s.next_binned(false), Some(4)); // wraps
+        s.select(Some(4));
+        assert_eq!(s.next_binned(true), Some(1));
+        assert_eq!(s.next_binned(false), Some(1));
+        s.assign(1, None);
+        assert_eq!(s.next_binned(true), None); // only the selected one is left
+        s.select(None);
+        assert_eq!(s.next_binned(true), Some(4));
+        assert_eq!(Session::new(Vec::new()).next_binned(true), None);
     }
 
     #[test]

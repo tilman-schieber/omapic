@@ -19,6 +19,8 @@ or it is one more explicit action on a bin.
 
 ## Polish
 
+- **Pan with the keyboard** while at actual pixels (e.g. `Shift`+arrows).
+- **Rotate EXIF-oriented dimensions** in the caption (shows sensor orientation today).
 - **Sort keys for the natural order** — `o` cycles name / mtime / size;
   session-only. EXIF date since an EXIF reader exists now.
 - **Image info** — `i` toggles file size, date and a few EXIF fields in the caption.
