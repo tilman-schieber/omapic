@@ -4,7 +4,7 @@ A tiny, fast, keyboard-driven image viewer and *temporary* organizer for
 [Omarchy](https://omarchy.org) / Arch Linux. Native Rust + GTK4, themed from
 the active Omarchy theme.
 
-<img src="docs/screenshot.png" alt="omapic: thumbnail grid with workspace badges, preview pane and status line" width="520">
+<img src="docs/screenshot.png" alt="omapic: thumbnail grid with workspace badges, preview pane and status line">
 
 The whole workflow:
 
