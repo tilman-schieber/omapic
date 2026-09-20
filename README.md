@@ -51,7 +51,7 @@ always hints at the keys that matter in the current context; `?` shows all.
 | `n` / `N` | next / previous binned image |
 | `Enter`, `Space` | enlarge preview (`Esc` to go back) |
 | `r` / `R` | rotate right / left — in the session only, until saved from the palette |
-| `z` | actual pixels at the pointer; drag to pan, position is kept from image to image |
+| `z` | actual pixels at the pointer; drag or `Shift`+arrows / `H J K L` to pan; the position is kept from image to image |
 | `1` … `9` | put the selected image into that workspace |
 | `0` | take it out of its workspace |
 | `v`, shift-click | mark a range; `1`…`9` / `0` then apply to all of it (one undo step) |

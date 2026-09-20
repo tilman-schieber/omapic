@@ -33,7 +33,7 @@ const HELP: &str = "\
 <b>n</b>  <b>N</b>               next / previous binned image
 <b>enter</b>  <b>space</b>       enlarge preview
 <b>r</b>  <b>R</b>               rotate right / left (in the session; save via <b>:</b>)
-<b>z</b>                  actual pixels at the pointer; drag to pan
+<b>z</b>                  actual pixels at the pointer; drag or shift+arrows / H J K L pan
 <b>1</b> … <b>9</b>              put image into workspace
 <b>0</b>                  take image out of its workspace
 <b>v</b>                  mark a range (also shift-click), then bin it in one go
@@ -521,7 +521,7 @@ impl App {
             }
         } else if self.enlarged.get() {
             if self.preview.is_actual_size() {
-                hints.extend([("drag", "pan"), ("z", "fit"), ("←→", "compare")]);
+                hints.extend([("drag / shift+←↓↑→", "pan"), ("z", "fit"), ("←→", "compare")]);
             } else {
                 hints.extend([("←→", "browse"), ("z", "1:1"), ("r", "rotate"), ("1-9", "bin"), ("esc", "back")]);
             }
@@ -904,6 +904,7 @@ impl App {
         let ctrl = state.contains(gdk::ModifierType::CONTROL_MASK);
         let alt = state.contains(gdk::ModifierType::ALT_MASK);
         let shift = state.contains(gdk::ModifierType::SHIFT_MASK);
+        let panning = self.preview.is_actual_size();
         let digit = key.to_unicode().and_then(|c| c.to_digit(10)).map(|d| d as u8);
 
         match (key, digit) {
@@ -935,6 +936,11 @@ impl App {
             (Key::U, _) => self.undo(true),
             (Key::f, _) => self.toggle_names(),
             (Key::i, _) => self.preview.toggle_info(),
+            // At actual pixels the reorder keys pan instead.
+            (Key::Left | Key::H, _) if shift && panning => self.preview.pan(-0.25, 0.0),
+            (Key::Right | Key::L, _) if shift && panning => self.preview.pan(0.25, 0.0),
+            (Key::Up | Key::K, _) if shift && panning => self.preview.pan(0.0, -0.25),
+            (Key::Down | Key::J, _) if shift && panning => self.preview.pan(0.0, 0.25),
             (Key::Left, _) if shift => self.move_selected(-1),
             (Key::Right, _) if shift => self.move_selected(1),
             (Key::H, _) => self.move_selected(-1),

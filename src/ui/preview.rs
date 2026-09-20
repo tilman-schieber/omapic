@@ -172,6 +172,13 @@ impl Preview {
         self.info.set_visible(!self.info.is_visible());
     }
 
+    /// Scroll by fractions of the pane, e.g. (0.25, 0.0) a quarter to the right.
+    pub fn pan(&self, dx: f64, dy: f64) {
+        for (adjustment, step) in self.adjustments().into_iter().zip([dx, dy]) {
+            adjustment.set_value(adjustment.value() + step * adjustment.page_size());
+        }
+    }
+
     pub fn is_actual_size(&self) -> bool {
         self.actual_size.get()
     }
