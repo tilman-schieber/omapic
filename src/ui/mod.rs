@@ -38,6 +38,7 @@ const HELP: &str = "\
 <b>s</b>                  manual sorting on / off
 <b>shift+←→</b>  <b>H L</b>      move image backward / forward
 <b>drag</b>               reorder thumbnails
+<b>f</b>                  file names under thumbnails
 <b>:</b>  <b>ctrl+k</b>          commands
 <b>?</b>                  this sheet (the status line hints at keys for the current context)
 <b>q</b>                  quit";
@@ -64,6 +65,9 @@ pub struct App {
     /// Ids in the store, in display order.
     view: RefCell<Vec<ImageId>>,
     hovered: Cell<Option<ImageId>>,
+    show_names: Cell<bool>,
+    /// The file name label of every grid cell built so far.
+    name_labels: RefCell<Vec<glib::WeakRef<gtk::Label>>>,
     zoomed: Cell<bool>,
     syncing: Cell<bool>,
     css: gtk::CssProvider,
@@ -180,6 +184,8 @@ pub fn build(application: &gtk::Application, input: Input) {
         bound: RefCell::default(),
         view: RefCell::default(),
         hovered: Cell::new(None),
+        show_names: Cell::new(false),
+        name_labels: RefCell::default(),
         zoomed: Cell::new(false),
         syncing: Cell::new(false),
         css,
@@ -335,6 +341,10 @@ impl App {
             let ws = entry.workspace.map_or(0, u32::from);
             if item.workspace() != ws {
                 item.set_workspace(ws);
+            }
+            let name = file_name(&entry.path);
+            if item.name() != name {
+                item.set_name(name); // files get renamed by commands
             }
         }
         self.syncing.set(true);
@@ -623,6 +633,19 @@ impl App {
         self.sync();
     }
 
+    fn register_name_label(&self, label: &gtk::Label) {
+        label.set_visible(self.show_names.get());
+        self.name_labels.borrow_mut().push(label.downgrade());
+    }
+
+    fn toggle_names(&self) {
+        let show = !self.show_names.get();
+        self.show_names.set(show);
+        self.name_labels.borrow_mut().retain(|label| {
+            label.upgrade().inspect(|l| l.set_visible(show)).is_some()
+        });
+    }
+
     fn toggle_zoom(self: &Rc<Self>) {
         let zoomed = !self.zoomed.get();
         self.zoomed.set(zoomed);
@@ -664,6 +687,7 @@ impl App {
             (Key::question, _) => self.palette.open_help(),
             (Key::q, _) => self.window.close(),
             (Key::s, _) => self.toggle_sort(),
+            (Key::f, _) => self.toggle_names(),
             (Key::Left, _) if shift => self.move_selected(-1),
             (Key::Right, _) if shift => self.move_selected(1),
             (Key::H, _) => self.move_selected(-1),

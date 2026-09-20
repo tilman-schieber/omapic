@@ -15,6 +15,8 @@ mod imp {
     pub struct ImageItem {
         #[property(get, set)]
         id: Cell<u32>,
+        #[property(get, set)]
+        name: RefCell<String>,
         /// 0 = unassigned.
         #[property(get, set)]
         workspace: Cell<u32>,

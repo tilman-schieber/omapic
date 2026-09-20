@@ -56,6 +56,9 @@ gridview.grid > child:drop(active) {
   background: @om_accent;
 }
 
+.name { padding-top: 3px; color: @om_muted; font-size: 8pt; }
+gridview.grid > child:selected .name { color: @om_foreground; }
+
 .broken { color: @om_muted; font-size: 8pt; }
 
 /* ── preview ──────────────────────────────────────────── */

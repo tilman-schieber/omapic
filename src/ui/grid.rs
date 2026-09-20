@@ -21,26 +21,51 @@ pub fn factory(app: &Rc<App>) -> gtk::SignalListItemFactory {
     let weak: Weak<App> = Rc::downgrade(app);
     factory.connect_setup(move |_, object| {
         let list_item = object.downcast_ref::<gtk::ListItem>().unwrap();
-        let picture = gtk::Picture::builder()
-            .content_fit(gtk::ContentFit::Contain)
-            .can_shrink(true)
-            .width_request(CELL)
-            .height_request(CELL)
-            .build();
+        // The frame gives the overlay exactly the image's rectangle inside
+        // the square cell, so the badge sits on the picture's corner.
+        let picture = gtk::Picture::builder().content_fit(gtk::ContentFit::Fill).can_shrink(true).build();
         let badge = gtk::Label::builder()
             .halign(gtk::Align::End)
             .valign(gtk::Align::Start)
             .css_classes(["badge"])
             .build();
         let broken = gtk::Label::builder().label("unreadable").css_classes(["broken"]).build();
-        let cell = gtk::Overlay::builder().child(&picture).css_classes(["cell"]).build();
-        cell.add_overlay(&badge);
-        cell.add_overlay(&broken);
+        let image = gtk::Overlay::builder().child(&picture).build();
+        image.add_overlay(&badge);
+        image.add_overlay(&broken);
+        let frame = gtk::AspectFrame::builder()
+            .child(&image)
+            .obey_child(false)
+            .ratio(1.5)
+            .width_request(CELL)
+            .height_request(CELL)
+            .build();
+        picture.connect_paintable_notify(glib::clone!(
+            #[weak]
+            frame,
+            move |picture| {
+                if let Some(paintable) = picture.paintable().filter(|p| p.intrinsic_height() > 0) {
+                    frame.set_ratio(paintable.intrinsic_width() as f32 / paintable.intrinsic_height() as f32);
+                }
+            }
+        ));
+        let name = gtk::Label::builder()
+            .ellipsize(gtk::pango::EllipsizeMode::Middle)
+            .max_width_chars(1)
+            .css_classes(["name"])
+            .build();
+        let cell = gtk::Box::builder().orientation(gtk::Orientation::Vertical).css_classes(["cell"]).build();
+        cell.append(&frame);
+        cell.append(&name);
         list_item.set_child(Some(&cell));
+        if let Some(app) = weak.upgrade() {
+            app.register_name_label(&name);
+        }
 
         let item = list_item.property_expression("item");
         item.chain_property::<ImageItem>("texture").bind(&picture, "paintable", gtk::Widget::NONE);
         item.chain_property::<ImageItem>("failed").bind(&broken, "visible", gtk::Widget::NONE);
+        item.chain_property::<ImageItem>("name").bind(&name, "label", gtk::Widget::NONE);
         let workspace = item.chain_property::<ImageItem>("workspace");
         workspace
             .chain_closure::<String>(glib::closure!(|_: Option<glib::Object>, ws: u32| ws.to_string()))

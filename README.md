@@ -50,6 +50,7 @@ always hints at the keys that matter in the current context; `?` shows all.
 | `s` | manual sorting on / off for the current view |
 | `Shift+←` `Shift+→`, `H` `L` | move the image backward / forward |
 | drag a thumbnail | reorder |
+| `f` | file names under thumbnails |
 | `:` or `Ctrl+K` | command palette |
 | `?` | key sheet |
 | `q` | quit |
