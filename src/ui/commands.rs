@@ -15,6 +15,8 @@ use crate::theme::Theme;
 
 #[derive(Clone, Copy)]
 enum Command {
+    Open,
+    Add,
     Transfer(Op),
     Rename,
     ContactSheet,
@@ -27,6 +29,8 @@ enum Command {
 }
 
 const COMMANDS: &[(&str, Command)] = &[
+    ("Open folder… (new session)", Command::Open),
+    ("Add folder to session…", Command::Add),
     ("Move workspace to folder…", Command::Transfer(Op::Move)),
     ("Copy workspace to folder…", Command::Transfer(Op::Copy)),
     ("Symlink workspace into folder…", Command::Transfer(Op::Symlink)),
@@ -51,6 +55,11 @@ pub async fn run(app: Rc<App>, index: usize) {
     }
 }
 
+/// `Ctrl+O`, and what an empty window starts with.
+pub async fn run_open(app: Rc<App>) {
+    execute(app, Command::Open).await;
+}
+
 /// `!` goes straight to the shell prompt.
 pub async fn run_shell(app: Rc<App>) {
     execute(app, Command::Shell).await;
@@ -58,6 +67,8 @@ pub async fn run_shell(app: Rc<App>) {
 
 async fn execute(app: Rc<App>, command: Command) {
     let result = match command {
+        Command::Open => open(&app).await,
+        Command::Add => add(&app).await,
         Command::Shell => shell(&app).await,
         Command::Transfer(op) => transfer(&app, op).await,
         Command::Rename => rename(&app).await,
@@ -223,6 +234,43 @@ async fn save_rotations(app: &Rc<App>) -> Outcome {
     }
 }
 
+/// A new session in the same window: a folder, or an image to open its folder at.
+async fn open(app: &Rc<App>) -> Outcome {
+    let title = "Open folder (or image) — starts a new session";
+    let Some(answer) = app.palette.ask(title, &app.current_folder(), true).await else { return Ok(None) };
+    let path = fsops::expand(&answer);
+    if !path.exists() {
+        return Err(format!("no such folder: {}", path.display()));
+    }
+    let input = crate::cli::resolve(&[path.display().to_string()]);
+    if input.paths.is_empty() {
+        return Err(format!("no images in {}", path.display())); // and the session stays
+    }
+    let lost = app.session.borrow().work_summary();
+    if let Some(lost) = lost {
+        let question = format!("Discard the current session ({lost})?");
+        if app.palette.ask_yes_no(&question, false).await != Some(true) {
+            return Ok(None);
+        }
+    }
+    let count = app.open(input);
+    Ok(Some(format!("{count} images · {}", path.display())))
+}
+
+/// More images for the session at hand; nothing is lost, so no questions.
+async fn add(app: &Rc<App>) -> Outcome {
+    let title = "Add folder (or image) to this session";
+    let Some(answer) = app.palette.ask(title, &app.current_folder(), true).await else { return Ok(None) };
+    let path = fsops::expand(&answer);
+    if !path.exists() {
+        return Err(format!("no such folder: {}", path.display()));
+    }
+    match app.add_and_show(crate::cli::expand(&[path.clone()])) {
+        0 => Err(format!("nothing new in {}", path.display())),
+        n => Ok(Some(format!("{n} images added from {}", path.display()))),
+    }
+}
+
 /// Run a shell command over the shown images, per file or all at once.
 async fn shell(app: &Rc<App>) -> Outcome {
     let files = app.visible_files();
@@ -283,7 +331,7 @@ async fn shell(app: &Rc<App>) -> Outcome {
     .await
     .map_err(|_| "shell command crashed".to_string())?;
 
-    let added = app.add_images(created);
+    let added = app.add_images(created).len();
     let ids: Vec<usize> = files.iter().map(|(id, _)| *id).collect();
     app.files_changed(&ids);
     let new = match added {

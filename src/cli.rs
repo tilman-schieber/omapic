@@ -124,6 +124,19 @@ pub fn resolve(args: &[String]) -> Input {
     }
 }
 
+/// Images among `paths`: files as they are, folders by their content.
+pub fn expand(paths: &[PathBuf]) -> Vec<PathBuf> {
+    let mut images = Vec::new();
+    for path in paths {
+        if path.is_dir() {
+            images.extend(scan_dir(path));
+        } else if path.is_file() && is_image(path) {
+            images.push(path.clone());
+        }
+    }
+    images
+}
+
 pub fn scan_dir(dir: &Path) -> Vec<PathBuf> {
     let Ok(read) = std::fs::read_dir(dir) else {
         return Vec::new();

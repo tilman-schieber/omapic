@@ -45,6 +45,10 @@ JPEG, PNG, WebP, GIF (animated in the preview) and TIFF are supported.
     omapic *.jpg …       # exactly the given files, in the given order
     omapic --print …     # on quit, print the paths of the images then shown
 
+Started where there are no images (from a launcher, say), omapic asks for a
+folder right away. `Ctrl+O` opens another folder at any time, and files or
+folders dropped on the window join the session.
+
 Hover or move the selection to preview. The right end of the status line
 always hints at the keys that matter right now; `?` shows all of them.
 
@@ -66,6 +70,12 @@ Three ideas carry everything:
 pixels — the zoom position stays when you step to the next frame, so near-
 duplicates are easy to compare. `u` takes back a slip. `Alt+U` shows what is
 still undecided.
+
+**…work on another folder, or on several at once?**
+`Ctrl+O` starts a new session in the same window (it asks first if bins,
+marks or an arrangement would be lost). `:` → *Add folder to session…* — or
+dropping files and folders from a file manager onto the window — brings more
+images into the session you have, so one bin can collect from many places.
 
 **…collect the keepers in a new folder?**
 `Alt+1` to show the bin, `:` → *Move workspace to folder…* (or *Copy…*), type
@@ -157,6 +167,7 @@ nothing is gone for good.
 
 | Act | |
 |---|---|
+| `Ctrl+O` | open another folder (new session) |
 | `:` or `Ctrl+K` | command palette |
 | `!` | shell command on the images shown |
 | `y` / `Y` | copy the path of the selected image(s) / of everything shown (kept after quitting via `wl-copy`, if installed) |
@@ -182,10 +193,13 @@ for that view only; it never renames anything.
 
 ### Commands
 
-All commands act on the images **currently shown**, in the order shown.
+Apart from the first two, all commands act on the images **currently
+shown**, in the order shown.
 
 | Command | |
 |---|---|
+| Open folder… (`Ctrl+O`) | a new session in this window; a path to an image opens its folder with that image selected |
+| Add folder to session… | more images for the current session, unbinned; same as dropping them on the window |
 | Move workspace to folder… | asks for a folder (Tab completes, `~` works, created if missing) |
 | Copy workspace to folder… | same, leaving the originals |
 | Symlink / Hard-link workspace into folder… | a selection folder without duplicating the data |

@@ -4,6 +4,7 @@
 //!   `j`, `alt+1`, `shift+Right`, `colon` …  a key press (GDK key names)
 //!   `text:TEXT`                            put TEXT into the palette entry (`_` = space)
 //!   `type:TEXT`                            the same, and accept
+//!   `drop:PATH`                            as if PATH were dropped on the window
 //!   `snap:FILE.png`                        render the window into a PNG
 //!
 //! `OMAPIC_SCRIPT_START` (ms, default 2500) delays the first step.
@@ -25,6 +26,8 @@ pub fn run_script(app: &Rc<App>) {
         for step in script.split_whitespace() {
             if let Some(path) = step.strip_prefix("snap:") {
                 snapshot(&app, path);
+            } else if let Some(path) = step.strip_prefix("drop:") {
+                app.dropped(vec![path.into()]);
             } else if let Some(text) = step.strip_prefix("text:") {
                 app.palette.debug_text(&text.replace('_', " "));
             } else if let Some(text) = step.strip_prefix("type:") {

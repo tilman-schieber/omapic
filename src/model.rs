@@ -456,6 +456,37 @@ impl Session {
         (first..self.images.len()).collect()
     }
 
+    /// What would be lost by starting over, e.g. "12 binned, 3 marked".
+    /// `None` if the session holds no organizing work.
+    pub fn work_summary(&self) -> Option<String> {
+        let present = || self.images.iter().filter(|e| !e.removed);
+        let counts = [
+            (present().filter(|e| e.workspace.is_some()).count(), "binned"),
+            (present().filter(|e| e.mark).count(), "marked"),
+            (present().filter(|e| e.rotation != 0).count(), "rotated"),
+            (self.views.iter().filter(|v| v.manual_sort_enabled).count(), "arranged by hand"),
+        ];
+        let parts: Vec<String> =
+            counts.iter().filter(|(n, _)| *n > 0).map(|(n, what)| format!("{n} {what}")).collect();
+        (!parts.is_empty()).then(|| parts.join(", "))
+    }
+
+    /// Start over with other images: everything so far leaves, along with
+    /// all bins, marks, orders and the undo history.
+    pub fn replace(&mut self, paths: Vec<PathBuf>) -> Vec<ImageId> {
+        for entry in &mut self.images {
+            entry.removed = true;
+        }
+        self.views.iter_mut().for_each(|view| *view = Workspace::default());
+        self.undo.clear();
+        self.redo.clear();
+        self.active = 0;
+        self.anchor = None;
+        let ids = self.add(paths);
+        self.selected = ids.first().copied();
+        ids
+    }
+
     /// The files behind `ids` no longer exist. Not an undo step: undo never
     /// brings files back, and a removed image stays hidden in every state.
     pub fn remove(&mut self, ids: &[ImageId]) {
@@ -631,6 +662,26 @@ mod tests {
         s.set_active(2);
         s.assign_selection(None); // and back onto the pile
         assert_eq!(s.unbinned_count(), 3);
+    }
+
+    #[test]
+    fn replacing_the_session_starts_clean() {
+        let mut s = session(3);
+        assert_eq!(s.work_summary(), None);
+        s.assign(0, Some(2));
+        s.select(Some(1));
+        s.toggle_mark();
+        s.rotate(&[2], 1);
+        s.move_to(2, 0);
+        assert_eq!(s.work_summary().as_deref(), Some("1 binned, 1 marked, 1 rotated, 1 arranged by hand"));
+        s.set_active(2);
+
+        let ids = s.replace(vec![PathBuf::from("/q/a.jpg"), PathBuf::from("/q/b.jpg")]);
+        assert_eq!(ids, vec![3, 4]);
+        assert_eq!((s.active(), s.visible(), s.selected()), (0, vec![3, 4], Some(3)));
+        assert_eq!((s.len(), s.work_summary()), (2, None));
+        assert!(!s.undo() && !s.manual_sort());
+        assert!(s.view_order(2).is_empty());
     }
 
     #[test]

@@ -51,6 +51,7 @@ const HELP: &str = "\
 <b>+</b>  <b>-</b>               larger / smaller thumbnails
 <b>f</b>                  file names under thumbnails
 <b>i</b>                  file and camera info under the preview
+<b>ctrl+o</b>             open another folder (or drop files on the window)
 <b>:</b>  <b>ctrl+k</b>          commands
 <b>!</b>                  run a shell command on the images shown
 <b>?</b>                  this sheet
@@ -233,9 +234,14 @@ pub fn build(application: &gtk::Application, input: Input, print: Option<char>) 
         }
     });
 
-    if app.items.borrow().is_empty() {
-        app.say("no images found", true);
-    }
+    let drop = gtk::DropTarget::new(gdk::FileList::static_type(), gdk::DragAction::COPY);
+    let weak = Rc::downgrade(&app);
+    drop.connect_drop(move |_, value, _, _| {
+        let (Some(app), Ok(files)) = (weak.upgrade(), value.get::<gdk::FileList>()) else { return false };
+        app.dropped(files.files().iter().filter_map(|f| f.path()).collect());
+        true
+    });
+    app.window.add_controller(drop);
     let weak = Rc::downgrade(&app);
     app.window.connect_close_request(move |_| {
         if let Some(app) = weak.upgrade() {
@@ -252,6 +258,10 @@ pub fn build(application: &gtk::Application, input: Input, print: Option<char>) 
     });
     app.window.present();
     app.grid.grab_focus();
+    if app.items.borrow().is_empty() {
+        // Nothing here (started from a launcher, say): ask where the images are.
+        glib::spawn_future_local(commands::run_open(app.clone()));
+    }
     // Once the grid has a size, bring the initially selected image into view.
     let weak = Rc::downgrade(&app);
     glib::idle_add_local_once(move || {
@@ -816,7 +826,7 @@ impl App {
 
     /// Image files that appeared in the session's folders (made by a shell
     /// command) join the session, unbinned, at the end.
-    pub(super) fn add_images(self: &Rc<Self>, paths: Vec<std::path::PathBuf>) -> usize {
+    pub(super) fn add_images(self: &Rc<Self>, paths: Vec<std::path::PathBuf>) -> Vec<ImageId> {
         let known: HashSet<std::path::PathBuf> =
             self.session.borrow().images().iter().filter(|e| !e.removed).map(|e| e.path.clone()).collect();
         let new: Vec<_> = paths.into_iter().filter(|p| !known.contains(p)).collect();
@@ -825,7 +835,74 @@ impl App {
         if !ids.is_empty() && self.sort_key.get() != SortKey::Input {
             self.apply_sort_key(); // slot them in where the current order wants them
         }
+        ids
+    }
+
+    /// More images for the running session (palette, or dropped on the window).
+    pub(super) fn add_and_show(self: &Rc<Self>, paths: Vec<std::path::PathBuf>) -> usize {
+        let ids = self.add_images(paths);
+        if let Some(&first) = ids.first() {
+            let mut session = self.session.borrow_mut();
+            session.set_active(0);
+            session.select(Some(first));
+        }
+        self.hovered.set(None);
+        self.sync();
         ids.len()
+    }
+
+    /// Start a new session in this window. The caller has made sure nothing
+    /// is lost that the user wants to keep.
+    pub(super) fn open(self: &Rc<Self>, input: Input) -> usize {
+        self.preview.clear();
+        self.thumb_order.borrow_mut().clear();
+        for item in self.items.borrow().iter() {
+            item.set_texture(gdk::Texture::NONE); // the old thumbnails are dead weight now
+            item.set_sharp(false);
+        }
+        let ids = self.session.borrow_mut().replace(input.paths);
+        self.items.borrow_mut().extend(ids.iter().map(|&id| ImageItem::new(id)));
+        if let Some(&id) = input.select.and_then(|index| ids.get(index)) {
+            self.session.borrow_mut().select(Some(id));
+        }
+        if self.enlarged.get() {
+            self.toggle_enlarged();
+        }
+        self.hovered.set(None);
+        self.sync();
+        if !ids.is_empty() && self.sort_key.get() != SortKey::Input {
+            self.apply_sort_key();
+        }
+        ids.len()
+    }
+
+    /// Where path prompts start: the folder of the selected image, else the
+    /// working directory.
+    pub(super) fn current_folder(&self) -> String {
+        let session = self.session.borrow();
+        let folder = session
+            .selected()
+            .and_then(|id| session.image(id).path.parent().map(std::path::PathBuf::from))
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_else(|| "/".into());
+        format!("{}/", folder.display().to_string().trim_end_matches('/'))
+    }
+
+    /// Files and folders dropped from a file manager join the session — or
+    /// become it, if there is none yet.
+    fn dropped(self: &Rc<Self>, paths: Vec<std::path::PathBuf>) {
+        let args: Vec<String> = paths.iter().map(|p| p.display().to_string()).collect();
+        let count = if self.session.borrow().len() == 0 {
+            self.open(crate::cli::resolve(&args))
+        } else {
+            self.add_and_show(crate::cli::expand(&paths))
+        };
+        let text = match count {
+            0 => "nothing new among what was dropped".to_string(),
+            1 => "1 image added".to_string(),
+            n => format!("{n} images added"),
+        };
+        self.say(&text, count == 0);
     }
 
     /// Copy paths to the clipboard: the marked images, or everything shown.
@@ -1045,6 +1122,9 @@ impl App {
             (Key::u | Key::grave | Key::dead_grave, _) if alt && !ctrl => self.show_workspace(UNBINNED),
             (_, Some(d)) if !ctrl => self.toggle_bin(if d == 0 { 10 } else { d }),
             (Key::k, _) if ctrl => self.palette.open_commands(),
+            (Key::o, _) if ctrl && !alt => {
+                glib::spawn_future_local(commands::run_open(self.clone()));
+            }
             (Key::r, _) if ctrl && !alt => self.undo(true),
             _ if ctrl || alt => return glib::Propagation::Proceed,
             (Key::colon, _) => self.palette.open_commands(),
