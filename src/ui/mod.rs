@@ -39,6 +39,7 @@ const HELP: &str = "\
 <b>s</b>                  manual sorting on / off
 <b>shift+←→</b>  <b>H L</b>      move image backward / forward
 <b>drag</b>               reorder thumbnails
+<b>u</b>  <b>U</b> / <b>ctrl+r</b>      undo / redo binning and ordering
 <b>f</b>                  file names under thumbnails
 <b>:</b>  <b>ctrl+k</b>          commands
 <b>?</b>                  this sheet (the status line hints at keys for the current context)
@@ -617,6 +618,18 @@ impl App {
         self.sync();
     }
 
+    fn undo(self: &Rc<Self>, redo: bool) {
+        let mut session = self.session.borrow_mut();
+        let changed = if redo { session.redo() } else { session.undo() };
+        drop(session);
+        self.hovered.set(None);
+        if changed {
+            self.sync();
+        }
+        let what = if redo { "redo" } else { "undo" };
+        self.say(if changed { what } else { "nothing to take back" }, false);
+    }
+
     fn toggle_sort(self: &Rc<Self>) {
         self.session.borrow_mut().toggle_manual_sort();
         self.sync();
@@ -701,11 +714,14 @@ impl App {
             (_, Some(0)) if !ctrl => self.assign(None),
             (_, Some(d)) if !ctrl => self.assign(Some(d)),
             (Key::k, _) if ctrl => self.palette.open_commands(),
+            (Key::r, _) if ctrl && !alt => self.undo(true),
             _ if ctrl || alt => return glib::Propagation::Proceed,
             (Key::colon, _) => self.palette.open_commands(),
             (Key::question, _) => self.palette.open_help(),
             (Key::q, _) => self.window.close(),
             (Key::s, _) => self.toggle_sort(),
+            (Key::u, _) => self.undo(false),
+            (Key::U, _) => self.undo(true),
             (Key::f, _) => self.toggle_names(),
             (Key::Left, _) if shift => self.move_selected(-1),
             (Key::Right, _) if shift => self.move_selected(1),

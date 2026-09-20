@@ -22,12 +22,26 @@ pub struct Workspace {
     pub explicit_order: Vec<ImageId>,
 }
 
+/// Everything undo brings back. File paths are not part of it: what
+/// commands did on disk stays done.
+#[derive(Debug, Clone)]
+struct Snapshot {
+    workspaces: Vec<Option<u8>>,
+    views: Vec<Workspace>,
+    active: u8,
+    selected: Option<ImageId>,
+}
+
+const UNDO_DEPTH: usize = 200;
+
 #[derive(Debug)]
 pub struct Session {
     images: Vec<ImageEntry>,
     views: Vec<Workspace>,
     active: u8,
     selected: Option<ImageId>,
+    undo: Vec<Snapshot>,
+    redo: Vec<Snapshot>,
 }
 
 impl Session {
@@ -41,7 +55,52 @@ impl Session {
             views: vec![Workspace::default(); WORKSPACES as usize + 1],
             active: 0,
             selected: None,
+            undo: Vec::new(),
+            redo: Vec::new(),
         }
+    }
+
+    fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            workspaces: self.images.iter().map(|e| e.workspace).collect(),
+            views: self.views.clone(),
+            active: self.active,
+            selected: self.selected,
+        }
+    }
+
+    fn restore(&mut self, snapshot: Snapshot) {
+        for (entry, workspace) in self.images.iter_mut().zip(snapshot.workspaces) {
+            entry.workspace = workspace;
+        }
+        self.views = snapshot.views;
+        self.active = snapshot.active;
+        self.selected = snapshot.selected;
+    }
+
+    /// Remember the state an organizing action is about to change.
+    fn checkpoint(&mut self, before: Snapshot) {
+        self.undo.push(before);
+        if self.undo.len() > UNDO_DEPTH {
+            self.undo.remove(0);
+        }
+        self.redo.clear();
+    }
+
+    /// Take back the last assignment, reordering or sort toggle. Returns to
+    /// the view and selection it happened in. Browsing is not undone.
+    pub fn undo(&mut self) -> bool {
+        let Some(snapshot) = self.undo.pop() else { return false };
+        self.redo.push(self.snapshot());
+        self.restore(snapshot);
+        true
+    }
+
+    pub fn redo(&mut self) -> bool {
+        let Some(snapshot) = self.redo.pop() else { return false };
+        self.undo.push(self.snapshot());
+        self.restore(snapshot);
+        true
     }
 
     pub fn images(&self) -> &[ImageEntry] {
@@ -123,6 +182,7 @@ impl Session {
         if old == ws {
             return;
         }
+        self.checkpoint(self.snapshot());
         let before = self.visible();
         self.images[id].workspace = ws;
         if let Some(old) = old {
@@ -142,6 +202,7 @@ impl Session {
     }
 
     pub fn toggle_manual_sort(&mut self) -> bool {
+        self.checkpoint(self.snapshot());
         let enabled = !self.manual_sort();
         if enabled {
             self.enable_manual_sort();
@@ -166,15 +227,16 @@ impl Session {
     /// Move `id` to position `to` within the active view. Enables manual sorting.
     /// Returns false if nothing changed.
     pub fn move_to(&mut self, id: ImageId, to: usize) -> bool {
+        let before = self.snapshot();
         self.enable_manual_sort();
         let mut order = self.visible();
-        let Some(from) = order.iter().position(|&x| x == id) else {
+        let from = order.iter().position(|&x| x == id);
+        let to = to.min(order.len().saturating_sub(1));
+        let Some(from) = from.filter(|&from| from != to) else {
+            self.restore(before); // nothing moved: don't leave sorting switched on
             return false;
         };
-        let to = to.min(order.len() - 1);
-        if from == to {
-            return false;
-        }
+        self.checkpoint(before);
         order.remove(from);
         order.insert(to, id);
         self.views[self.active as usize].explicit_order = order;
@@ -285,6 +347,47 @@ mod tests {
         assert_eq!(s.visible(), vec![0, 1, 2, 3]);
         assert!(s.toggle_manual_sort()); // the arrangement was remembered
         assert_eq!(s.visible(), vec![3, 1, 0, 2]);
+    }
+
+    #[test]
+    fn undo_and_redo() {
+        let mut s = session(4);
+        s.select(Some(1));
+        s.assign(1, Some(1));
+        s.assign(2, Some(1));
+        s.set_active(1);
+        s.select(Some(2));
+        s.assign(2, Some(3)); // leaves the view
+        assert_eq!(s.visible(), vec![1]);
+
+        assert!(s.undo());
+        assert_eq!(s.visible(), vec![1, 2]);
+        assert_eq!(s.selected(), Some(2));
+        assert!(s.redo());
+        assert_eq!(s.image(2).workspace, Some(3));
+        assert!(s.undo());
+
+        s.move_to(2, 0);
+        assert_eq!(s.visible(), vec![2, 1]);
+        s.set_active(0); // browsing is not an undo step
+        assert!(s.undo());
+        assert_eq!(s.active(), 1);
+        assert!(!s.manual_sort());
+        assert_eq!(s.visible(), vec![1, 2]);
+
+        assert!(s.undo() && s.undo());
+        assert!(!s.undo());
+        assert_eq!(s.workspace_count(1), 0);
+        s.assign(0, Some(9)); // a new action drops the redo history
+        assert!(!s.redo());
+    }
+
+    #[test]
+    fn a_move_that_moves_nothing_changes_nothing() {
+        let mut s = session(3);
+        assert!(!s.move_to(0, 0));
+        assert!(!s.manual_sort());
+        assert!(!s.undo());
     }
 
     #[test]
