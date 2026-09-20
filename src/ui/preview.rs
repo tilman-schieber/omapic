@@ -56,6 +56,8 @@ pub struct Preview {
     actual_size: Cell<bool>,
     /// Undownscaled decode of the target, when the cached one isn't.
     original: RefCell<Option<(ImageId, gdk::Texture)>>,
+    /// A GIF playing in place of its still frame.
+    animation: RefCell<Option<gtk::MediaFile>>,
     /// Last pointer position over the pane.
     pointer: Cell<Option<(f64, f64)>>,
     /// Scroll values to apply once the adjustments have grown: (value, needed upper).
@@ -103,6 +105,7 @@ impl Preview {
             has_full: Cell::new(false),
             actual_size: Cell::new(false),
             original: RefCell::default(),
+            animation: RefCell::default(),
             pointer: Cell::new(None),
             pending_scroll: Default::default(),
             generation: Cell::new(0),
@@ -275,6 +278,7 @@ impl Preview {
     }
 
     pub fn clear(&self) {
+        self.stop_animation();
         self.target.set(None);
         self.generation.set(self.generation.get() + 1);
         self.picture.set_paintable(gdk::Paintable::NONE);
@@ -300,6 +304,7 @@ impl Preview {
             self.caption_for(&shot.path, self.cached_dimensions(shot.id));
             return;
         }
+        self.stop_animation();
         self.target.set(Some(shot.id));
         self.target_turns.set(shot.turns);
         self.target_path.replace(shot.path.clone());
@@ -308,6 +313,7 @@ impl Preview {
         self.generation.set(generation);
 
         if self.display_cached(&shot) {
+            self.animate(&shot);
             self.fetch_original(shot.id);
             for neighbour in neighbours {
                 self.fetch(neighbour, Vec::new());
@@ -326,6 +332,34 @@ impl Preview {
                 this.fetch(shot, neighbours);
             }
         });
+    }
+
+    fn stop_animation(&self) {
+        if let Some(media) = self.animation.take() {
+            media.pause();
+        }
+    }
+
+    /// GIFs play once their still frame is up — if GTK's media backend can
+    /// decode them; otherwise the still simply stays.
+    fn animate(self: &Rc<Self>, shot: &Shot) {
+        let is_gif = shot.path.extension().is_some_and(|e| e.eq_ignore_ascii_case("gif"));
+        if !is_gif || shot.turns != 0 {
+            return;
+        }
+        let media = gtk::MediaFile::for_filename(&shot.path);
+        media.set_loop(true);
+        media.set_muted(true);
+        let (this, id) = (Rc::downgrade(self), shot.id);
+        media.connect_prepared_notify(move |media| {
+            let Some(this) = this.upgrade() else { return };
+            let current = this.animation.borrow().as_ref() == Some(media);
+            if current && media.is_prepared() && media.error().is_none() && this.wants(id, 0) {
+                this.picture.set_paintable(Some(media));
+            }
+        });
+        media.play();
+        self.animation.replace(Some(media));
     }
 
     /// Show the shot from the cache, marking it most recently used.
@@ -379,6 +413,7 @@ impl Preview {
                 }
                 if this.wants(shot.id, shot.turns) && !this.has_full.get() {
                     this.display_cached(&shot);
+                    this.animate(&shot);
                     this.fetch_original(shot.id);
                 }
             }

@@ -23,7 +23,8 @@ confirm it.
     cd omapic
     cargo install --path .        # → ~/.cargo/bin/omapic
 
-ImageMagick (`magick`) is only needed for contact sheets. JPEG, PNG, WebP,
+ImageMagick (`magick`) is only needed for contact sheets. Animated GIFs play in
+the preview. JPEG, PNG, WebP,
 GIF and TIFF are loaded through gdk-pixbuf/glycin, which GTK4 already pulls in.
 
 ## Usage
