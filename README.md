@@ -86,6 +86,7 @@ All commands act on the images **currently shown**, in the order shown.
 | Symlink / Hard-link workspace into folder… | a selection folder without duplicating the data |
 | Rename files in workspace according to current order… | in place: `001_name.jpg`, `002_…` |
 | Create contact sheet… | output file, columns, thumbnail size, labels on/off → `magick montage` |
+| Move workspace to trash… | the desktop trash, so it is recoverable — e.g. bin 9 for rejects |
 | Save rotations to files… | writes pending `r`/`R` rotations of the shown JPEGs |
 | Open containing folder | of the selected image |
 | Remove selected image from workspace | same as `0` |
@@ -117,7 +118,7 @@ rotations before making a contact sheet.
 - Every operation needs an explicit `y`.
 - The only command that changes file contents is *Save rotations*, and it
   changes nothing but the orientation value.
-- There is no delete.
+- There is no delete; the closest thing is the (recoverable) trash.
 
 ## Theming
 

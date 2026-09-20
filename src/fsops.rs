@@ -221,6 +221,22 @@ fn move_new(src: &Path, dst: &Path) -> io::Result<()> {
     }
 }
 
+/// Move files to the desktop's trash (recoverable). Returns the indices
+/// that went and the first problem, if any; nothing is ever deleted outright.
+pub fn trash(files: &[PathBuf]) -> Outcome {
+    use gtk::gio::{self, prelude::*};
+    let mut outcome = Outcome { done: Vec::new(), error: None };
+    for (i, path) in files.iter().enumerate() {
+        match gio::File::for_path(path).trash(gio::Cancellable::NONE) {
+            Ok(()) => outcome.done.push(i),
+            Err(e) => {
+                outcome.error.get_or_insert(format!("{e} ({})", crate::cli::file_name(path)));
+            }
+        }
+    }
+    outcome
+}
+
 /// Rotate a JPEG losslessly by `quarters` clockwise: only its EXIF
 /// orientation changes, the image data is not touched.
 pub fn save_rotation(path: &Path, quarters: u8) -> Result<(), String> {

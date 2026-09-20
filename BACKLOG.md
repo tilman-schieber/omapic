@@ -11,8 +11,6 @@ or it is one more explicit action on a bin.
   composes with the shell (`omapic *.jpg --print | xargs …`).
 - **Run a shell command on the workspace** — `:!` with `{}` substitution
   (`mogrify -resize 50% {}`), confirmed like every other file operation.
-- **Move workspace to trash** — via `gio trash`; recoverable, so it fits the
-  safety rules. Enables "bin 9 = rejects → trash".
 
 ## Polish
 

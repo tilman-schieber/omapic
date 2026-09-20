@@ -443,7 +443,7 @@ impl App {
             self.strip.remove(&child);
         }
         for view in 0..=WORKSPACES {
-            let count = if view == 0 { session.images().len() } else { session.workspace_count(view) };
+            let count = if view == 0 { session.len() } else { session.workspace_count(view) };
             if view != 0 && count == 0 && session.active() != view {
                 continue;
             }
@@ -455,7 +455,7 @@ impl App {
             self.strip.append(&label);
         }
         let unbinned = session.unbinned_count();
-        if session.active() == UNBINNED || (unbinned > 0 && unbinned < session.images().len()) {
+        if session.active() == UNBINNED || (unbinned > 0 && unbinned < session.len()) {
             let label = gtk::Label::builder().label(format!("unbinned {unbinned}")).css_classes(["ws"]).build();
             if session.active() == UNBINNED {
                 label.add_css_class("active");

@@ -16,6 +16,8 @@ pub struct ImageEntry {
     pub workspace: Option<u8>,
     /// Quarter turns clockwise, shown but not yet written to the file.
     pub rotation: u8,
+    /// The file is gone (trashed by a command); ids stay stable, the entry hides.
+    pub removed: bool,
 }
 
 /// Sort state of one view. View 0 is "all images", 1..=9 are the
@@ -56,7 +58,7 @@ impl Session {
     pub fn new(paths: Vec<PathBuf>) -> Self {
         let images = paths
             .into_iter()
-            .map(|path| ImageEntry { path, workspace: None, rotation: 0 })
+            .map(|path| ImageEntry { path, workspace: None, rotation: 0, removed: false })
             .collect();
         Session {
             images,
@@ -138,15 +140,23 @@ impl Session {
         self.views[self.active as usize].manual_sort_enabled
     }
 
+    /// Number of images still in the session.
+    pub fn len(&self) -> usize {
+        self.images.iter().filter(|e| !e.removed).count()
+    }
+
     pub fn workspace_count(&self, ws: u8) -> usize {
-        self.images.iter().filter(|e| e.workspace == Some(ws)).count()
+        self.images.iter().filter(|e| !e.removed && e.workspace == Some(ws)).count()
     }
 
     pub fn unbinned_count(&self) -> usize {
-        self.images.iter().filter(|e| e.workspace.is_none()).count()
+        self.images.iter().filter(|e| !e.removed && e.workspace.is_none()).count()
     }
 
     fn in_view(&self, view: u8, id: ImageId) -> bool {
+        if self.images[id].removed {
+            return false;
+        }
         match view {
             0 => true,
             UNBINNED => self.images[id].workspace.is_none(),
@@ -210,7 +220,7 @@ impl Session {
     }
 
     pub fn pending_rotations(&self) -> usize {
-        self.images.iter().filter(|e| e.rotation != 0).count()
+        self.images.iter().filter(|e| !e.removed && e.rotation != 0).count()
     }
 
     /// The pending rotation of `id` has been written to its file: the file
@@ -364,6 +374,23 @@ impl Session {
         to != pos && self.move_to(id, to)
     }
 
+    /// The files behind `ids` no longer exist. Not an undo step: undo never
+    /// brings files back, and a removed image stays hidden in every state.
+    pub fn remove(&mut self, ids: &[ImageId]) {
+        let before = self.visible();
+        for &id in ids {
+            if let Some(entry) = self.images.get_mut(id) {
+                entry.removed = true;
+            }
+        }
+        self.anchor = None;
+        if self.selected.is_some_and(|id| self.images[id].removed) {
+            let after = self.visible();
+            let first = before.iter().position(|id| ids.contains(id)).unwrap_or(0);
+            self.selected = after.get(first).or(after.last()).copied();
+        }
+    }
+
     /// Record that a file now lives elsewhere (after an explicit move/rename).
     pub fn set_path(&mut self, id: ImageId, path: PathBuf) {
         if let Some(e) = self.images.get_mut(id) {
@@ -472,6 +499,24 @@ mod tests {
         s.set_active(2);
         s.assign_marked(None); // and back onto the pile
         assert_eq!(s.unbinned_count(), 3);
+    }
+
+    #[test]
+    fn removed_images_vanish_for_good() {
+        let mut s = session(4);
+        s.assign(1, Some(1));
+        s.assign(2, Some(1));
+        s.set_active(1);
+        s.select(Some(1));
+        s.remove(&[1]);
+        assert_eq!(s.visible(), vec![2]);
+        assert_eq!(s.selected(), Some(2));
+        assert_eq!((s.len(), s.workspace_count(1)), (3, 1));
+        assert!(s.undo()); // back before image 2 was binned; 1 stays gone
+        s.set_active(0);
+        assert_eq!(s.visible(), vec![0, 2, 3]);
+        s.remove(&[0, 2, 3]);
+        assert_eq!(s.selected(), None);
     }
 
     #[test]

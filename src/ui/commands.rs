@@ -18,6 +18,7 @@ enum Command {
     Rename,
     ContactSheet,
     SaveRotations,
+    Trash,
     OpenFolder,
     Unbin,
     Help,
@@ -31,6 +32,7 @@ const COMMANDS: &[(&str, Command)] = &[
     ("Rename files in workspace according to current order…", Command::Rename),
     ("Create contact sheet…", Command::ContactSheet),
     ("Save rotations to files…", Command::SaveRotations),
+    ("Move workspace to trash…", Command::Trash),
     ("Open containing folder", Command::OpenFolder),
     ("Remove selected image from workspace", Command::Unbin),
     ("Keyboard shortcuts", Command::Help),
@@ -47,6 +49,7 @@ pub async fn run(app: Rc<App>, index: usize) {
         Command::Rename => rename(&app).await,
         Command::ContactSheet => contact_sheet(&app).await,
         Command::SaveRotations => save_rotations(&app).await,
+        Command::Trash => trash(&app).await,
         Command::OpenFolder => open_folder(&app),
         Command::Unbin => {
             app.assign(None);
@@ -203,6 +206,36 @@ async fn save_rotations(app: &Rc<App>) -> Outcome {
     match results.into_iter().find_map(|(_, r)| r.err()) {
         Some(problem) => Err(format!("saved {}, but {problem}", saved.len())),
         None => Ok(Some(format!("rotation of {} files saved", saved.len()))),
+    }
+}
+
+/// Names only, for confirmations that have no target side.
+fn name_list(files: &[(usize, PathBuf)]) -> String {
+    const SHOWN: usize = 5;
+    let mut lines: Vec<String> = files.iter().take(SHOWN).map(|(_, p)| file_name(p)).collect();
+    if files.len() > SHOWN {
+        lines.push(format!("… and {} more", files.len() - SHOWN));
+    }
+    lines.join("\n")
+}
+
+async fn trash(app: &Rc<App>) -> Outcome {
+    let files = app.visible_files();
+    if files.is_empty() {
+        return Err(format!("{} is empty", app.view_name()));
+    }
+    let question = format!("Move the {} files of {} to the trash?", files.len(), app.view_name());
+    if app.palette.confirm(&question, &name_list(&files), false).await != Some(true) {
+        return Ok(None);
+    }
+    let paths: Vec<PathBuf> = files.iter().map(|(_, p)| p.clone()).collect();
+    let outcome = gio::spawn_blocking(move || fsops::trash(&paths)).await.map_err(|_| "trash crashed".to_string())?;
+    let gone: Vec<usize> = outcome.done.iter().map(|&i| files[i].0).collect();
+    app.session.borrow_mut().remove(&gone);
+    app.sync();
+    match outcome.error {
+        Some(error) => Err(format!("trashed {} of {}: {error}", gone.len(), files.len())),
+        None => Ok(Some(format!("{} files moved to the trash", gone.len()))),
     }
 }
 
