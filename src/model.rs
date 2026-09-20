@@ -40,6 +40,8 @@ pub struct Session {
     views: Vec<Workspace>,
     active: u8,
     selected: Option<ImageId>,
+    /// Other end of a range selection that extends to `selected`.
+    anchor: Option<ImageId>,
     undo: Vec<Snapshot>,
     redo: Vec<Snapshot>,
 }
@@ -55,6 +57,7 @@ impl Session {
             views: vec![Workspace::default(); WORKSPACES as usize + 1],
             active: 0,
             selected: None,
+            anchor: None,
             undo: Vec::new(),
             redo: Vec::new(),
         }
@@ -76,6 +79,7 @@ impl Session {
         self.views = snapshot.views;
         self.active = snapshot.active;
         self.selected = snapshot.selected;
+        self.anchor = None;
     }
 
     /// Remember the state an organizing action is about to change.
@@ -166,38 +170,85 @@ impl Session {
             return;
         }
         self.active = view;
+        self.anchor = None;
         let visible = self.visible();
         if !self.selected.is_some_and(|id| visible.contains(&id)) {
             self.selected = visible.first().copied();
         }
     }
 
+    /// Start a range at the selected image, or drop the current one.
+    pub fn toggle_range(&mut self) {
+        self.anchor = if self.anchor.is_some() { None } else { self.selected };
+    }
+
+    pub fn clear_range(&mut self) {
+        self.anchor = None;
+    }
+
+    pub fn has_range(&self) -> bool {
+        self.anchor.is_some()
+    }
+
+    /// Select from `anchor` to `cursor`, e.g. after a shift-click.
+    pub fn select_range(&mut self, anchor: ImageId, cursor: ImageId) {
+        self.select(Some(cursor));
+        self.anchor = Some(anchor).filter(|&a| a != cursor && a < self.images.len());
+    }
+
+    /// The images actions apply to, in display order: the range between
+    /// anchor and selection, or just the selected image.
+    pub fn marked(&self) -> Vec<ImageId> {
+        let Some(selected) = self.selected else { return Vec::new() };
+        let visible = self.visible();
+        let position = |id| visible.iter().position(|&x| x == id);
+        match (self.anchor.and_then(position), position(selected)) {
+            (Some(a), Some(b)) => visible[a.min(b)..=a.max(b)].to_vec(),
+            _ => vec![selected],
+        }
+    }
+
     /// Assign `id` to a workspace (exclusive) or clear it with `None`.
     /// If the image leaves the active view, a neighbouring image becomes selected.
+    #[cfg(test)]
     pub fn assign(&mut self, id: ImageId, ws: Option<u8>) {
-        if id >= self.images.len() || ws.is_some_and(|w| w == 0 || w > WORKSPACES) {
+        self.assign_many(&[id], ws);
+    }
+
+    /// Assign everything marked, as a single undo step. Ends the range.
+    pub fn assign_marked(&mut self, ws: Option<u8>) {
+        let marked = self.marked();
+        self.assign_many(&marked, ws);
+        self.anchor = None;
+    }
+
+    fn assign_many(&mut self, ids: &[ImageId], ws: Option<u8>) {
+        if ws.is_some_and(|w| w == 0 || w > WORKSPACES) {
             return;
         }
-        let old = self.images[id].workspace;
-        if old == ws {
+        let ids: Vec<ImageId> =
+            ids.iter().copied().filter(|&id| id < self.images.len() && self.images[id].workspace != ws).collect();
+        if ids.is_empty() {
             return;
         }
         self.checkpoint(self.snapshot());
         let before = self.visible();
-        self.images[id].workspace = ws;
-        if let Some(old) = old {
-            self.views[old as usize].explicit_order.retain(|&x| x != id);
-        }
-        if let Some(new) = ws {
-            let order = &mut self.views[new as usize].explicit_order;
-            if !order.contains(&id) {
-                order.push(id);
+        for &id in &ids {
+            if let Some(old) = std::mem::replace(&mut self.images[id].workspace, ws) {
+                self.views[old as usize].explicit_order.retain(|&x| x != id);
+            }
+            if let Some(new) = ws {
+                let order = &mut self.views[new as usize].explicit_order;
+                if !order.contains(&id) {
+                    order.push(id);
+                }
             }
         }
-        if self.selected == Some(id) && !self.in_view(self.active, id) {
+        if self.selected.is_some_and(|id| !self.in_view(self.active, id)) {
+            // Whatever followed the departed images slides into their place.
             let after = self.visible();
-            let pos = before.iter().position(|&x| x == id).unwrap_or(0);
-            self.selected = after.get(pos).or(after.last()).copied();
+            let first = before.iter().position(|id| ids.contains(id)).unwrap_or(0);
+            self.selected = after.get(first).or(after.last()).copied();
         }
     }
 
@@ -347,6 +398,31 @@ mod tests {
         assert_eq!(s.visible(), vec![0, 1, 2, 3]);
         assert!(s.toggle_manual_sort()); // the arrangement was remembered
         assert_eq!(s.visible(), vec![3, 1, 0, 2]);
+    }
+
+    #[test]
+    fn range_assignment() {
+        let mut s = session(6);
+        s.select(Some(4));
+        assert_eq!(s.marked(), vec![4]);
+        s.toggle_range();
+        s.select(Some(2)); // ranges work backwards too
+        assert_eq!(s.marked(), vec![2, 3, 4]);
+        s.assign_marked(Some(1));
+        assert!(!s.has_range());
+        assert_eq!(s.view_order(1), vec![2, 3, 4]);
+
+        s.set_active(1);
+        s.select_range(2, 3);
+        s.assign_marked(Some(2));
+        assert_eq!(s.visible(), vec![4]);
+        assert_eq!(s.selected(), Some(4));
+
+        assert!(s.undo()); // the whole range is one step
+        assert_eq!(s.visible(), vec![2, 3, 4]);
+        s.toggle_range();
+        s.set_active(0);
+        assert!(!s.has_range());
     }
 
     #[test]

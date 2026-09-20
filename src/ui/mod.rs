@@ -34,6 +34,7 @@ const HELP: &str = "\
 <b>z</b>                  actual pixels at the pointer; drag to pan
 <b>1</b> … <b>9</b>              put image into workspace
 <b>0</b>                  take image out of its workspace
+<b>v</b>                  mark a range (also shift-click), then bin it in one go
 <b>a</b>                  auto-advance: binning moves on to the next image
 <b>alt+1</b> … <b>alt+9</b>      show only that workspace
 <b>alt+0</b>              show all images
@@ -51,7 +52,7 @@ pub struct App {
     session: RefCell<Session>,
     items: Vec<ImageItem>,
     store: gio::ListStore,
-    selection: gtk::SingleSelection,
+    selection: gtk::MultiSelection,
     grid: gtk::GridView,
     scroller: gtk::ScrolledWindow,
     preview: Rc<Preview>,
@@ -92,11 +93,7 @@ pub fn build(application: &gtk::Application, input: Input) {
 
     let items: Vec<ImageItem> = (0..input.paths.len()).map(ImageItem::new).collect();
     let store = gio::ListStore::new::<ImageItem>();
-    let selection = gtk::SingleSelection::builder()
-        .model(&store)
-        .autoselect(false)
-        .can_unselect(true)
-        .build();
+    let selection = gtk::MultiSelection::new(Some(store.clone()));
     let grid = gtk::GridView::builder()
         .model(&selection)
         .min_columns(1)
@@ -237,17 +234,33 @@ impl App {
         keys.connect_key_pressed(move |_, key, _, state| app.key(key, state));
         self.window.add_controller(keys);
 
+        // Clicks: plain selects, shift/ctrl-click mark a range.
         let weak = Rc::downgrade(self);
-        self.selection.connect_selected_notify(move |selection| {
+        self.selection.connect_selection_changed(move |selection, _, _| {
             let Some(app) = weak.upgrade() else { return };
             if app.syncing.get() {
                 return;
             }
-            let id = app.view.borrow().get(selection.selected() as usize).copied();
-            app.session.borrow_mut().select(id);
+            let chosen = selection.selection();
+            if chosen.is_empty() {
+                return app.sync(); // keep the current image selected
+            }
+            let (first, last) = (chosen.minimum() as usize, chosen.maximum() as usize);
+            let ends = {
+                let view = app.view.borrow();
+                view.get(first).copied().zip(view.get(last).copied())
+            };
+            if let Some((first, last)) = ends {
+                let mut session = app.session.borrow_mut();
+                // The end that moved is the cursor.
+                if session.selected() == Some(last) {
+                    session.select_range(last, first);
+                } else {
+                    session.select_range(first, last);
+                }
+            }
             app.hovered.set(None);
-            app.update_preview();
-            app.update_status();
+            app.sync();
         });
 
         let weak = Rc::downgrade(self);
@@ -354,8 +367,14 @@ impl App {
             }
         }
         self.syncing.set(true);
-        let position = self.selected_position().map_or(gtk::INVALID_LIST_POSITION, |p| p as u32);
-        self.selection.set_selected(position);
+        let marked: Vec<usize> = {
+            let (session, view) = (self.session.borrow(), self.view.borrow());
+            session.marked().iter().filter_map(|id| view.iter().position(|x| x == id)).collect()
+        };
+        self.selection.unselect_all();
+        if let (Some(&first), Some(&last)) = (marked.iter().min(), marked.iter().max()) {
+            self.selection.select_range(first as u32, (last - first + 1) as u32, true);
+        }
         self.syncing.set(false);
         self.scroll_to_selected();
         self.update_preview();
@@ -445,7 +464,11 @@ impl App {
         let in_workspace = session.active() != 0;
         // First, so a narrow window never ellipsizes it away.
         let mut hints: Vec<(&str, &str)> = vec![("?", "keys")];
-        if self.view.borrow().is_empty() {
+        let marked = session.marked().len();
+        let count = format!("bin {marked} images");
+        if session.has_range() {
+            hints.extend([("1-9", count.as_str()), ("0", "unbin them"), ("v esc", "end range")]);
+        } else if self.view.borrow().is_empty() {
             if in_workspace {
                 hints.push(("alt+0", "all images"));
             }
@@ -611,17 +634,28 @@ impl App {
     }
 
     fn assign(self: &Rc<Self>, workspace: Option<u8>) {
-        let Some(id) = self.session.borrow().selected() else { return };
-        self.session.borrow_mut().assign(id, workspace);
-        // If the image left the view, the next one already slid into place.
-        let still_here = self.session.borrow().selected() == Some(id);
-        if self.advance.get() && workspace.is_some() && still_here {
-            let next = self.selected_position().and_then(|p| self.view.borrow().get(p + 1).copied());
-            if next.is_some() {
-                self.session.borrow_mut().select(next);
-            }
+        let marked = self.session.borrow().marked();
+        let Some(&last) = marked.last() else { return };
+        let after = self.view.borrow().iter().position(|&x| x == last).map(|p| p + 1);
+        let next = after.and_then(|p| self.view.borrow().get(p).copied());
+        let mut session = self.session.borrow_mut();
+        session.assign_marked(workspace);
+        // If the images left the view, the next one already slid into place.
+        let still_here = session.selected().is_some_and(|id| marked.contains(&id));
+        if self.advance.get() && workspace.is_some() && still_here && next.is_some() {
+            session.select(next);
+        }
+        drop(session);
+        if marked.len() > 1 {
+            let place = workspace.map_or("out of their bins".into(), |w| format!("→ bin {w}"));
+            self.say(&format!("{} images {place}", marked.len()), false);
         }
         self.hovered.set(None);
+        self.sync();
+    }
+
+    fn toggle_range(self: &Rc<Self>) {
+        self.session.borrow_mut().toggle_range();
         self.sync();
     }
 
@@ -654,6 +688,7 @@ impl App {
     }
 
     fn move_selected(self: &Rc<Self>, delta: isize) {
+        self.session.borrow_mut().clear_range();
         if self.session.borrow_mut().move_selected(delta) {
             self.sync();
         }
@@ -662,6 +697,7 @@ impl App {
     fn reorder_by_drop(self: &Rc<Self>, dragged: ImageId, target: ImageId) {
         let Some(position) = self.view.borrow().iter().position(|&x| x == target) else { return };
         let mut session = self.session.borrow_mut();
+        session.clear_range();
         session.move_to(dragged, position);
         session.select(Some(dragged));
         drop(session);
@@ -739,6 +775,8 @@ impl App {
             (Key::q, _) => self.window.close(),
             (Key::s, _) => self.toggle_sort(),
             (Key::a, _) => self.toggle_advance(),
+            (Key::v, _) => self.toggle_range(),
+            (Key::Escape, _) if self.session.borrow().has_range() => self.toggle_range(),
             (Key::u, _) => self.undo(false),
             (Key::U, _) => self.undo(true),
             (Key::f, _) => self.toggle_names(),
