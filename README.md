@@ -83,6 +83,7 @@ All commands act on the images **currently shown**, in the order shown.
 |---|---|
 | Move workspace to folder… | asks for a folder (Tab completes, `~` works, created if missing) |
 | Copy workspace to folder… | same, leaving the originals |
+| Symlink / Hard-link workspace into folder… | a selection folder without duplicating the data |
 | Rename files in workspace according to current order… | in place: `001_name.jpg`, `002_…` |
 | Create contact sheet… | output file, columns, thumbnail size, labels on/off → `magick montage` |
 | Save rotations to files… | writes pending `r`/`R` rotations of the shown JPEGs |

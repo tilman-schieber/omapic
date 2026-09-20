@@ -13,7 +13,6 @@ or it is one more explicit action on a bin.
   (`mogrify -resize 50% {}`), confirmed like every other file operation.
 - **Move workspace to trash** — via `gio trash`; recoverable, so it fits the
   safety rules. Enables "bin 9 = rejects → trash".
-- **Symlink / hardlink workspace into folder** — copy without duplicating data.
 
 ## Polish
 

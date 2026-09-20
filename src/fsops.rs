@@ -10,6 +10,10 @@ use std::path::{Path, PathBuf};
 pub enum Op {
     Move,
     Copy,
+    /// Symbolic links in the folder, pointing at the originals.
+    Symlink,
+    /// Hard links: second names for the same data, same filesystem only.
+    Hardlink,
     /// Rename in place, each file staying in its own directory.
     Rename,
 }
@@ -136,6 +140,9 @@ fn run(plan: &Plan, done: &mut Vec<usize>) -> io::Result<()> {
         if step.src != step.dst {
             match plan.op {
                 Op::Copy => copy_new(&step.src, &step.dst)?,
+                // Both refuse to replace an existing name.
+                Op::Symlink => std::os::unix::fs::symlink(&step.src, &step.dst)?,
+                Op::Hardlink => fs::hard_link(&step.src, &step.dst)?,
                 Op::Move | Op::Rename => move_new(&step.src, &step.dst)?,
             }
         }
@@ -360,6 +367,26 @@ mod tests {
         let other = touch(&dest, "a.jpg");
         let err = plan(Op::Copy, &[files[0].clone(), other], &dir.join("new"), false).unwrap_err();
         assert!(err.contains("both become"), "{err}");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn links_leave_originals_alone() {
+        let dir = tmp("links");
+        let files = vec![touch(&dir, "a.jpg"), touch(&dir, "b.jpg")];
+        let soft = dir.join("soft");
+        assert!(execute(&plan(Op::Symlink, &files, &soft, true).unwrap()).error.is_none());
+        assert_eq!(fs::read_link(soft.join("001_a.jpg")).unwrap(), files[0]);
+        assert_eq!(fs::read_to_string(soft.join("002_b.jpg")).unwrap(), "b.jpg");
+
+        let hard = dir.join("hard");
+        assert!(execute(&plan(Op::Hardlink, &files, &hard, false).unwrap()).error.is_none());
+        assert!(!hard.join("a.jpg").symlink_metadata().unwrap().file_type().is_symlink());
+        assert_eq!(fs::read_to_string(hard.join("a.jpg")).unwrap(), "a.jpg");
+
+        // A second run collides and is refused up front.
+        assert!(plan(Op::Symlink, &files, &soft, true).is_err());
+        assert!(files.iter().all(|f| f.exists()));
         fs::remove_dir_all(dir).unwrap();
     }
 

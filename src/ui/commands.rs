@@ -26,6 +26,8 @@ enum Command {
 const COMMANDS: &[(&str, Command)] = &[
     ("Move workspace to folder…", Command::Transfer(Op::Move)),
     ("Copy workspace to folder…", Command::Transfer(Op::Copy)),
+    ("Symlink workspace into folder…", Command::Transfer(Op::Symlink)),
+    ("Hard-link workspace into folder…", Command::Transfer(Op::Hardlink)),
     ("Rename files in workspace according to current order…", Command::Rename),
     ("Create contact sheet…", Command::ContactSheet),
     ("Save rotations to files…", Command::SaveRotations),
@@ -90,7 +92,12 @@ async fn transfer(app: &Rc<App>, op: Op) -> Outcome {
     if files.is_empty() {
         return Err(format!("{} is empty", app.view_name()));
     }
-    let (verb, done) = if op == Op::Move { ("Move", "moved") } else { ("Copy", "copied") };
+    let (verb, done) = match op {
+        Op::Move => ("Move", "moved"),
+        Op::Symlink => ("Symlink", "symlinked"),
+        Op::Hardlink => ("Hard-link", "hard-linked"),
+        _ => ("Copy", "copied"),
+    };
     let title = format!("{verb} {} ({} files) to folder", app.view_name(), files.len());
     let Some(answer) = app.palette.ask(&title, &default_dir(&files), true).await else {
         return Ok(None);
@@ -150,7 +157,7 @@ async fn finish(app: &Rc<App>, plan: fsops::Plan, files: &[(usize, PathBuf)], do
     .await
     .map_err(|_| "file operation crashed".to_string())?;
 
-    if plan.op != Op::Copy {
+    if matches!(plan.op, Op::Move | Op::Rename) {
         let mut session = app.session.borrow_mut();
         for &i in &outcome.done {
             session.set_path(files[i].0, plan.steps[i].dst.clone());
