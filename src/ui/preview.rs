@@ -1,8 +1,9 @@
 //! Preview pane. Shows the thumbnail at once, then swaps in a full decode
-//! made off the main thread. Loads that are no longer wanted are dropped.
+//! made off the main thread, and decodes the neighbours ahead of time so
+//! stepping through images is instant.
 
 use std::cell::{Cell, RefCell};
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Duration;
@@ -35,6 +36,7 @@ pub struct Preview {
     has_full: Cell<bool>,
     generation: Cell<u64>,
     cache: RefCell<VecDeque<Full>>,
+    loading: RefCell<HashSet<ImageId>>,
 }
 
 impl Preview {
@@ -63,6 +65,7 @@ impl Preview {
             has_full: Cell::new(false),
             generation: Cell::new(0),
             cache: RefCell::default(),
+            loading: RefCell::default(),
         })
     }
 
@@ -80,7 +83,14 @@ impl Preview {
         }
     }
 
-    pub fn show(self: &Rc<Self>, id: ImageId, path: PathBuf, placeholder: Option<gdk::Texture>) {
+    /// `neighbours` are decoded ahead once `id` itself is on screen.
+    pub fn show(
+        self: &Rc<Self>,
+        id: ImageId,
+        path: PathBuf,
+        placeholder: Option<gdk::Texture>,
+        neighbours: Vec<(ImageId, PathBuf)>,
+    ) {
         if self.target.get() == Some(id) {
             self.caption_for(&path, self.cached_dimensions(id));
             return;
@@ -89,11 +99,10 @@ impl Preview {
         let generation = self.generation.get() + 1;
         self.generation.set(generation);
 
-        if let Some(full) = self.cache.borrow().iter().find(|f| f.id == id) {
-            self.has_full.set(true);
-            self.picture.set_content_fit(gtk::ContentFit::ScaleDown);
-            self.picture.set_paintable(Some(&full.texture));
-            self.caption_for(&path, Some(full.dimensions));
+        if self.display_cached(id, &path) {
+            for (id, path) in neighbours {
+                self.fetch(id, path, Vec::new());
+            }
             return;
         }
         self.has_full.set(false);
@@ -104,32 +113,60 @@ impl Preview {
 
         let this = Rc::downgrade(self);
         glib::timeout_add_local_once(SETTLE, move || {
-            let Some(this) = this.upgrade() else { return };
-            if this.generation.get() != generation {
-                return;
+            if let Some(this) = this.upgrade().filter(|t| t.generation.get() == generation) {
+                this.fetch(id, path, neighbours);
             }
-            glib::spawn_future_local(async move {
-                let job_path = path.clone();
-                let loaded = gio::spawn_blocking(move || {
-                    let dimensions = Pixbuf::file_info(&job_path).map(|(_, w, h)| (w, h));
-                    (thumbs::decode(&job_path, MAX_EDGE), dimensions)
-                })
-                .await;
-                let Ok((Some(texture), dimensions)) = loaded else { return };
+        });
+    }
+
+    /// Show `id` from the cache, marking it most recently used.
+    fn display_cached(&self, id: ImageId, path: &std::path::Path) -> bool {
+        let mut cache = self.cache.borrow_mut();
+        let Some(index) = cache.iter().position(|f| f.id == id) else { return false };
+        let full = cache.remove(index).unwrap();
+        self.has_full.set(true);
+        self.picture.set_content_fit(gtk::ContentFit::ScaleDown);
+        self.picture.set_paintable(Some(&full.texture));
+        self.caption_for(path, Some(full.dimensions));
+        cache.push_back(full);
+        true
+    }
+
+    /// Decode into the cache; display if it is (still) the image wanted.
+    /// `then` are fetched afterwards, so they never compete with `id`.
+    fn fetch(self: &Rc<Self>, id: ImageId, path: PathBuf, then: Vec<(ImageId, PathBuf)>) {
+        let known = self.cache.borrow().iter().any(|f| f.id == id);
+        if known || !self.loading.borrow_mut().insert(id) {
+            for (id, path) in then {
+                self.fetch(id, path, Vec::new());
+            }
+            return;
+        }
+        let this = self.clone();
+        glib::spawn_future_local(async move {
+            let job_path = path.clone();
+            let loaded = gio::spawn_blocking(move || {
+                let dimensions = Pixbuf::file_info(&job_path).map(|(_, w, h)| (w, h));
+                (thumbs::decode(&job_path, MAX_EDGE), dimensions)
+            })
+            .await;
+            this.loading.borrow_mut().remove(&id);
+            if let Ok((Some(texture), dimensions)) = loaded {
                 let dimensions = dimensions.unwrap_or((texture.width(), texture.height()));
-                if this.generation.get() == generation {
-                    this.has_full.set(true);
-                    this.picture.set_content_fit(gtk::ContentFit::ScaleDown);
-                    this.picture.set_paintable(Some(&texture));
-                    this.caption_for(&path, Some(dimensions));
+                {
+                    let mut cache = this.cache.borrow_mut();
+                    cache.push_back(Full { id, texture, dimensions });
+                    while cache.len() > CACHED {
+                        cache.pop_front();
+                    }
                 }
-                let mut cache = this.cache.borrow_mut();
-                cache.retain(|f| f.id != id);
-                cache.push_back(Full { id, texture, dimensions });
-                while cache.len() > CACHED {
-                    cache.pop_front();
+                if this.target.get() == Some(id) && !this.has_full.get() {
+                    this.display_cached(id, &path);
                 }
-            });
+            }
+            for (id, path) in then {
+                this.fetch(id, path, Vec::new());
+            }
         });
     }
 

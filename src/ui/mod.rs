@@ -369,7 +369,18 @@ impl App {
         match target {
             Some(id) => {
                 let path = session.image(id).path.clone();
-                self.preview.show(id, path, self.items[id].texture());
+                // Stepping with the keyboard: have both neighbours ready.
+                let mut neighbours = Vec::new();
+                if session.selected() == Some(id) {
+                    let view = self.view.borrow();
+                    if let Some(position) = view.iter().position(|&x| x == id) {
+                        let around = [position.checked_add(1), position.checked_sub(1)];
+                        for &other in around.iter().flatten().filter_map(|&p| view.get(p)) {
+                            neighbours.push((other, session.image(other).path.clone()));
+                        }
+                    }
+                }
+                self.preview.show(id, path, self.items[id].texture(), neighbours);
                 if self.items[id].texture().is_none() && !self.items[id].failed() {
                     let position = self.view.borrow().iter().position(|&x| x == id).unwrap_or(0);
                     self.thumbs.request(id, session.image(id).path.clone(), position, false);
