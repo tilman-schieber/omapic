@@ -657,16 +657,21 @@ impl App {
         }
     }
 
+    /// Columns the grid currently has: the number of distinct x positions
+    /// among the cells on screen. (Dividing widths is off by one as soon as
+    /// margins add up over many columns.)
     fn columns(&self) -> usize {
+        let mut lefts = HashSet::new();
         let mut child = self.grid.first_child();
         while let Some(cell) = child {
             if cell.is_mapped() && cell.width() > 0 {
-                let columns = (self.grid.width() as f64 / cell.width() as f64).round();
-                return (columns as usize).max(1);
+                if let Some(bounds) = cell.compute_bounds(&self.grid) {
+                    lefts.insert(bounds.x().round() as i32);
+                }
             }
             child = cell.next_sibling();
         }
-        1
+        lefts.len().max(1)
     }
 
     fn select_position(self: &Rc<Self>, position: usize) {
