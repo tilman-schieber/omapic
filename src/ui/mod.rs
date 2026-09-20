@@ -17,7 +17,7 @@ use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
 
 use crate::cli::{Input, SortKey, file_name};
-use crate::model::{ImageId, Session, UNBINNED, WORKSPACES};
+use crate::model::{ImageId, Session, UNBINNED, WORKSPACES, bin_label};
 use crate::theme::{self, Theme};
 use crate::thumbs::{Thumbnail, Thumbnailer};
 use item::ImageItem;
@@ -34,12 +34,11 @@ const HELP: &str = "\
 <b>enter</b>  <b>space</b>       enlarge preview
 <b>r</b>  <b>R</b>               rotate right / left (in the session; save via <b>:</b>)
 <b>z</b>                  actual pixels at the pointer; drag or shift+arrows / H J K L pan
-<b>1</b> … <b>9</b>              put image into workspace
-<b>0</b>                  take image out of its workspace
+<b>1</b> … <b>9</b>  <b>0</b>           put image into that workspace; same key again takes it out
 <b>v</b>                  mark a range (also shift-click), then bin it in one go
 <b>a</b>                  auto-advance: binning moves on to the next image
-<b>alt+1</b> … <b>alt+9</b>      show only that workspace
-<b>alt+0</b>              show all images
+<b>alt+1</b> … <b>alt+0</b>      show only that workspace
+<b>alt+a</b>  <b>esc</b>         show all images
 <b>alt+u</b>  <b>alt+`</b>       show what is not binned yet
 <b>s</b>                  manual sorting on / off
 <b>o</b>                  order by: natural → date taken → modified → size → name
@@ -485,7 +484,7 @@ impl App {
             if view != 0 && count == 0 && session.active() != view {
                 continue;
             }
-            let text = if view == 0 { format!("all {count}") } else { format!("{view}:{count}") };
+            let text = if view == 0 { format!("all {count}") } else { format!("{}:{count}", bin_label(view)) };
             let label = gtk::Label::builder().label(text).css_classes(["ws"]).build();
             if session.active() == view {
                 label.add_css_class("active");
@@ -531,23 +530,25 @@ impl App {
         }
         let marked = session.marked().len();
         let count = format!("bin {marked} images");
+        let unbin_key;
         if session.has_range() {
-            hints.extend([("1-9", count.as_str()), ("0", "unbin them"), ("v esc", "end range")]);
+            hints.extend([("0-9", count.as_str()), ("same key", "unbin"), ("v esc", "end range")]);
         } else if self.view.borrow().is_empty() {
             if in_workspace {
-                hints.push(("alt+0", "all images"));
+                hints.push(("esc", "all images"));
             }
         } else if self.enlarged.get() {
             if self.preview.is_actual_size() {
                 hints.extend([("drag / shift+←↓↑→", "pan"), ("z", "fit"), ("←→", "compare")]);
             } else {
-                hints.extend([("←→", "browse"), ("z", "1:1"), ("r", "rotate"), ("1-9", "bin"), ("esc", "back")]);
+                hints.extend([("←→", "browse"), ("z", "1:1"), ("r", "rotate"), ("0-9", "bin"), ("esc", "back")]);
             }
         } else {
             let binned_view = (1..=WORKSPACES).contains(&session.active());
-            hints.push(("1-9", if binned_view { "rebin" } else { "bin" }));
-            if session.selected().is_some_and(|id| session.image(id).workspace.is_some()) {
-                hints.push(("0", "unbin"));
+            hints.push(("0-9", if binned_view { "rebin" } else { "bin" }));
+            if let Some(ws) = session.selected().and_then(|id| session.image(id).workspace) {
+                unbin_key = bin_label(ws);
+                hints.push((unbin_key.as_str(), "unbin"));
             }
             if session.manual_sort() {
                 hints.extend([("H L", "reorder"), ("s", "unsort")]);
@@ -555,9 +556,9 @@ impl App {
                 hints.push(("s", "sort"));
             }
             if in_workspace {
-                hints.extend([("alt+0", "all"), (":", "actions")]);
+                hints.extend([("esc", "all"), (":", "actions")]);
             } else {
-                hints.extend([("alt+1-9", "show bin"), ("alt+u", "unbinned"), ("enter", "enlarge"), (":", "commands")]);
+                hints.extend([("alt+0-9", "show bin"), ("alt+u", "unbinned"), ("enter", "enlarge"), (":", "commands")]);
             }
         }
         let markup: Vec<String> = hints
@@ -708,6 +709,12 @@ impl App {
         }
     }
 
+    /// Bin keys toggle: into the bin, or out again if already there.
+    fn toggle_bin(self: &Rc<Self>, workspace: u8) {
+        let target = self.session.borrow().toggle_target(workspace);
+        self.assign(target);
+    }
+
     fn assign(self: &Rc<Self>, workspace: Option<u8>) {
         let marked = self.session.borrow().marked();
         let Some(&last) = marked.last() else { return };
@@ -722,7 +729,7 @@ impl App {
         }
         drop(session);
         if marked.len() > 1 {
-            let place = workspace.map_or("out of their bins".into(), |w| format!("→ bin {w}"));
+            let place = workspace.map_or("out of their bins".into(), |w| format!("→ bin {}", bin_label(w)));
             self.say(&format!("{} images {place}", marked.len()), false);
         }
         self.hovered.set(None);
@@ -1009,10 +1016,11 @@ impl App {
         let digit = key.to_unicode().and_then(|c| c.to_digit(10)).map(|d| d as u8);
 
         match (key, digit) {
-            (_, Some(d)) if alt && !ctrl => self.show_workspace(d),
+            // The 0 key is the tenth workspace.
+            (_, Some(d)) if alt && !ctrl => self.show_workspace(if d == 0 { 10 } else { d }),
+            (Key::a, _) if alt && !ctrl => self.show_workspace(0),
             (Key::u | Key::grave | Key::dead_grave, _) if alt && !ctrl => self.show_workspace(UNBINNED),
-            (_, Some(0)) if !ctrl => self.assign(None),
-            (_, Some(d)) if !ctrl => self.assign(Some(d)),
+            (_, Some(d)) if !ctrl => self.toggle_bin(if d == 0 { 10 } else { d }),
             (Key::k, _) if ctrl => self.palette.open_commands(),
             (Key::r, _) if ctrl && !alt => self.undo(true),
             _ if ctrl || alt => return glib::Propagation::Proceed,
@@ -1061,6 +1069,7 @@ impl App {
             (Key::z, _) => self.toggle_actual_size(),
             (Key::Escape, _) if self.preview.is_actual_size() => self.toggle_actual_size(),
             (Key::Escape, _) if self.enlarged.get() => self.toggle_enlarged(),
+            (Key::Escape, _) if self.session.borrow().active() != 0 => self.show_workspace(0),
             _ => return glib::Propagation::Proceed,
         }
         glib::Propagation::Stop
@@ -1078,7 +1087,7 @@ impl App {
         match self.session.borrow().active() {
             0 => "all images".into(),
             UNBINNED => "unbinned images".into(),
-            n => format!("workspace {n}"),
+            n => format!("workspace {}", bin_label(n)),
         }
     }
 

@@ -67,7 +67,7 @@ pub fn factory(app: &Rc<App>) -> gtk::SignalListItemFactory {
         item.chain_property::<ImageItem>("name").bind(&name, "label", gtk::Widget::NONE);
         let workspace = item.chain_property::<ImageItem>("workspace");
         workspace
-            .chain_closure::<String>(glib::closure!(|_: Option<glib::Object>, ws: u32| ws.to_string()))
+            .chain_closure::<String>(glib::closure!(|_: Option<glib::Object>, ws: u32| crate::model::bin_label(ws as u8)))
             .bind(&badge, "label", gtk::Widget::NONE);
         workspace
             .chain_closure::<bool>(glib::closure!(|_: Option<glib::Object>, ws: u32| ws != 0))

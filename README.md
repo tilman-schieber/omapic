@@ -63,12 +63,11 @@ always hints at the keys that matter in the current context; `?` shows all.
 | `Enter`, `Space` | enlarge preview (`Esc` to go back) |
 | `r` / `R` | rotate right / left — in the session only, until saved from the palette |
 | `z` | actual pixels at the pointer; drag or `Shift`+arrows / `H J K L` to pan; the position is kept from image to image |
-| `1` … `9` | put the selected image into that workspace |
-| `0` | take it out of its workspace |
-| `v`, shift-click | mark a range; `1`…`9` / `0` then apply to all of it (one undo step) |
+| `1` … `9`, `0` | put the selected image into that workspace; the same key again takes it out |
+| `v`, shift-click | mark a range; a workspace key then applies to all of it (one undo step) |
 | `a` | auto-advance on/off: binning moves on to the next image |
-| `Alt+1` … `Alt+9` | show only that workspace |
-| `Alt+0` | show all images |
+| `Alt+1` … `Alt+9`, `Alt+0` | show only that workspace |
+| `Alt+A`, `Esc` | show all images |
 | `Alt+U`, ``Alt+` `` | show only what isn't binned yet — a worklist that empties as you go |
 | `o` | order unsorted views by: natural → date taken → date modified → size → name |
 | `s` | manual sorting on / off for the current view |
@@ -85,7 +84,8 @@ always hints at the keys that matter in the current context; `?` shows all.
 
 ### Workspaces
 
-Nine numbered bins. An image is in at most one; assigning it elsewhere moves
+Ten numbered bins, `1`–`9` and `0`. An image is in at most one; pressing
+its bin's key again takes it out, and assigning it elsewhere moves
 it, and it leaves the current view immediately if that view no longer
 matches. Tagged thumbnails carry a numbered badge, and the status line lists
 the non-empty bins with their counts.
@@ -111,7 +111,7 @@ All commands act on the images **currently shown**, in the order shown.
 | Move workspace to trash… | the desktop trash, so it is recoverable — e.g. bin 9 for rejects |
 | Save rotations to files… | writes pending `r`/`R` rotations of the shown JPEGs |
 | Open containing folder | of the selected image |
-| Remove selected image from workspace | same as `0` |
+| Remove selected image from workspace | same as pressing its workspace key again |
 
 When a manually sorted view is moved or copied, omapic offers to persist the
 order as numeric prefixes. The width fits the image count (at least three

@@ -6,7 +6,13 @@ use std::path::PathBuf;
 /// Index into `Session::images`. Stable for the lifetime of the session.
 pub type ImageId = usize;
 
-pub const WORKSPACES: u8 = 9;
+/// Workspaces 1..=10. The tenth sits on the `0` key and is shown as "0".
+pub const WORKSPACES: u8 = 10;
+
+/// What a workspace is called on screen: the key that fills it.
+pub fn bin_label(workspace: u8) -> String {
+    (workspace % 10).to_string()
+}
 /// View showing the images that are in no workspace yet.
 pub const UNBINNED: u8 = WORKSPACES + 1;
 
@@ -20,7 +26,7 @@ pub struct ImageEntry {
     pub removed: bool,
 }
 
-/// Sort state of one view. View 0 is "all images", 1..=9 are the
+/// Sort state of one view. View 0 is "all images", 1..=10 are the
 /// workspaces, `UNBINNED` the rest.
 #[derive(Debug, Clone, Default)]
 pub struct Workspace {
@@ -130,7 +136,7 @@ impl Session {
         &self.images[id]
     }
 
-    /// 0 = all images, 1..=9 = workspace filter, `UNBINNED`.
+    /// 0 = all images, 1..=10 = workspace filter, `UNBINNED`.
     pub fn active(&self) -> u8 {
         self.active
     }
@@ -301,6 +307,14 @@ impl Session {
         self.assign_many(&[id], ws);
     }
 
+    /// Bin keys toggle: what pressing the key of `ws` should do to the marked
+    /// images — take them out if every one is in there already, else put them in.
+    pub fn toggle_target(&self, ws: u8) -> Option<u8> {
+        let marked = self.marked();
+        let all_in = !marked.is_empty() && marked.iter().all(|&id| self.images[id].workspace == Some(ws));
+        (!all_in).then_some(ws)
+    }
+
     /// Assign everything marked, as a single undo step. Ends the range.
     pub fn assign_marked(&mut self, ws: Option<u8>) {
         let marked = self.marked();
@@ -445,8 +459,31 @@ mod tests {
         s.assign(1, None);
         assert_eq!(s.image(1).workspace, None);
         s.assign(1, Some(0));
-        s.assign(1, Some(10));
+        s.assign(1, Some(11));
         assert_eq!(s.image(1).workspace, None);
+        s.assign(1, Some(10)); // the tenth workspace, on the 0 key
+        assert_eq!(s.view_order(10), vec![1]);
+        assert_eq!((bin_label(10), bin_label(3)), ("0".to_string(), "3".to_string()));
+    }
+
+    #[test]
+    fn bin_keys_toggle() {
+        let mut s = session(3);
+        s.select(Some(0));
+        assert_eq!(s.toggle_target(1), Some(1));
+        s.assign_marked(s.toggle_target(1));
+        assert_eq!(s.toggle_target(2), Some(2)); // another bin: move there
+        assert_eq!(s.toggle_target(1), None); // its own bin: out
+        s.assign_marked(s.toggle_target(1));
+        assert_eq!(s.image(0).workspace, None);
+
+        // A range goes out only if all of it is in; otherwise the rest joins.
+        s.assign(1, Some(4));
+        s.select_range(0, 1);
+        assert_eq!(s.toggle_target(4), Some(4));
+        s.assign_marked(Some(4));
+        s.select_range(0, 1);
+        assert_eq!(s.toggle_target(4), None);
     }
 
     #[test]
