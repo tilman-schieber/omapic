@@ -116,12 +116,15 @@ the window class is `org.omapic.Omapic`.
     src/fsops.rs     the only code that modifies files: plan → check → execute
     src/montage.rs   `magick montage` invocation
     src/thumbs.rs    off-thread decoding, thumbnail worker pool
+    src/quick.rs     ready-made thumbnails: XDG cache lookup, EXIF previews
     src/theme.rs     Omarchy colors.toml → GTK CSS, live reload
     src/ui/          window, grid cells, preview, palette, commands
 
-Thumbnails are decoded on worker threads, nearest-to-viewport first, and
-kept in a bounded in-memory cache; the full-size preview is decoded only
-for the image being looked at.
+Thumbnails come from worker threads, nearest-to-viewport first. Each image
+is first looked up in the freedesktop thumbnail cache (`~/.cache/thumbnails`,
+read but never written) and in its own EXIF data; an embedded preview is
+shown at once and replaced by a proper decode afterwards. Thumbnails live in
+a bounded in-memory cache; full-size previews are decoded only on demand.
 
 Debug builds can be driven by a script for smoke tests, including rendering
 the window to a PNG without a visible screen:

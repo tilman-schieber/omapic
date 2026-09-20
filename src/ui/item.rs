@@ -20,6 +20,9 @@ mod imp {
         workspace: Cell<u32>,
         #[property(get, set, nullable)]
         texture: RefCell<Option<gdk::Texture>>,
+        /// The texture is a proper thumbnail, not a stand-in.
+        #[property(get, set)]
+        sharp: Cell<bool>,
         #[property(get, set)]
         failed: Cell<bool>,
     }

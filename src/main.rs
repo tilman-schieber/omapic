@@ -2,6 +2,7 @@ mod cli;
 mod fsops;
 mod model;
 mod montage;
+mod quick;
 mod theme;
 mod thumbs;
 mod ui;

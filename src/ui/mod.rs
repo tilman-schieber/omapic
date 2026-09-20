@@ -19,7 +19,7 @@ use gtk::{gdk, gio, glib};
 use crate::cli::{Input, file_name};
 use crate::model::{ImageId, Session, WORKSPACES};
 use crate::theme::{self, Theme};
-use crate::thumbs::Thumbnailer;
+use crate::thumbs::{Thumbnail, Thumbnailer};
 use item::ImageItem;
 use palette::Palette;
 use preview::Preview;
@@ -194,9 +194,9 @@ pub fn build(application: &gtk::Application, input: Input) {
 
     let weak = Rc::downgrade(&app);
     glib::spawn_future_local(async move {
-        while let Ok((id, texture)) = thumb_results.recv().await {
+        while let Ok(thumbnail) = thumb_results.recv().await {
             let Some(app) = weak.upgrade() else { break };
-            app.thumbnail_ready(id, texture);
+            app.thumbnail_ready(thumbnail);
         }
     });
 
@@ -372,7 +372,7 @@ impl App {
                 self.preview.show(id, path, self.items[id].texture());
                 if self.items[id].texture().is_none() && !self.items[id].failed() {
                     let position = self.view.borrow().iter().position(|&x| x == id).unwrap_or(0);
-                    self.thumbs.request(id, session.image(id).path.clone(), position);
+                    self.thumbs.request(id, session.image(id).path.clone(), position, false);
                 }
             }
             None => self.preview.clear(),
@@ -477,8 +477,9 @@ impl App {
     fn cell_bound(&self, item: &ImageItem, position: usize) {
         let id = item.id() as usize;
         self.bound.borrow_mut().insert(id);
-        if item.texture().is_none() && !item.failed() {
-            self.thumbs.request(id, self.session.borrow().image(id).path.clone(), position);
+        if !item.sharp() && !item.failed() {
+            let path = self.session.borrow().image(id).path.clone();
+            self.thumbs.request(id, path, position, item.texture().is_some());
         }
     }
 
@@ -493,12 +494,10 @@ impl App {
     fn cell_unbound(&self, item: &ImageItem) {
         let id = item.id() as usize;
         self.bound.borrow_mut().remove(&id);
-        if item.texture().is_none() {
-            self.thumbs.cancel(id);
-        }
+        self.thumbs.cancel(id);
     }
 
-    fn thumbnail_ready(&self, id: ImageId, texture: Option<gdk::Texture>) {
+    fn thumbnail_ready(&self, Thumbnail { id, texture, sharp }: Thumbnail) {
         let item = &self.items[id];
         let Some(texture) = texture else {
             item.set_failed(true);
@@ -509,6 +508,7 @@ impl App {
             self.thumb_order.borrow_mut().push_back(id);
         }
         item.set_texture(Some(texture));
+        item.set_sharp(sharp);
 
         let mut order = self.thumb_order.borrow_mut();
         let mut spared = Vec::new();
@@ -518,6 +518,7 @@ impl App {
                 spared.push(old);
             } else {
                 self.items[old].set_texture(gdk::Texture::NONE);
+                self.items[old].set_sharp(false);
             }
         }
         order.extend(spared);

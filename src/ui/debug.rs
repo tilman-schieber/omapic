@@ -4,6 +4,8 @@
 //!   `j`, `alt+1`, `shift+Right`, `colon` …  a key press (GDK key names)
 //!   `type:TEXT`                            answer the open palette prompt
 //!   `snap:FILE.png`                        render the window into a PNG
+//!
+//! `OMAPIC_SCRIPT_START` (ms, default 2500) delays the first step.
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -17,7 +19,8 @@ pub fn run_script(app: &Rc<App>) {
     let Ok(script) = std::env::var("OMAPIC_SCRIPT") else { return };
     let app = app.clone();
     glib::spawn_future_local(async move {
-        glib::timeout_future(Duration::from_millis(2500)).await;
+        let start = std::env::var("OMAPIC_SCRIPT_START").ok().and_then(|s| s.parse().ok()).unwrap_or(2500);
+        glib::timeout_future(Duration::from_millis(start)).await;
         for step in script.split_whitespace() {
             if let Some(path) = step.strip_prefix("snap:") {
                 snapshot(&app, path);
