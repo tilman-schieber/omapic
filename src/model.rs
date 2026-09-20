@@ -7,6 +7,8 @@ use std::path::PathBuf;
 pub type ImageId = usize;
 
 pub const WORKSPACES: u8 = 9;
+/// View showing the images that are in no workspace yet.
+pub const UNBINNED: u8 = WORKSPACES + 1;
 
 #[derive(Debug, Clone)]
 pub struct ImageEntry {
@@ -14,7 +16,8 @@ pub struct ImageEntry {
     pub workspace: Option<u8>,
 }
 
-/// Sort state of one view. View 0 is "all images", 1..=9 are the workspaces.
+/// Sort state of one view. View 0 is "all images", 1..=9 are the
+/// workspaces, `UNBINNED` the rest.
 #[derive(Debug, Clone, Default)]
 pub struct Workspace {
     pub manual_sort_enabled: bool,
@@ -54,7 +57,7 @@ impl Session {
             .collect();
         Session {
             images,
-            views: vec![Workspace::default(); WORKSPACES as usize + 1],
+            views: vec![Workspace::default(); UNBINNED as usize + 1],
             active: 0,
             selected: None,
             anchor: None,
@@ -115,7 +118,7 @@ impl Session {
         &self.images[id]
     }
 
-    /// 0 = all images, 1..=9 = workspace filter.
+    /// 0 = all images, 1..=9 = workspace filter, `UNBINNED`.
     pub fn active(&self) -> u8 {
         self.active
     }
@@ -132,8 +135,16 @@ impl Session {
         self.images.iter().filter(|e| e.workspace == Some(ws)).count()
     }
 
+    pub fn unbinned_count(&self) -> usize {
+        self.images.iter().filter(|e| e.workspace.is_none()).count()
+    }
+
     fn in_view(&self, view: u8, id: ImageId) -> bool {
-        view == 0 || self.images[id].workspace == Some(view)
+        match view {
+            0 => true,
+            UNBINNED => self.images[id].workspace.is_none(),
+            _ => self.images[id].workspace == Some(view),
+        }
     }
 
     /// Image ids shown in the active view, in display order.
@@ -166,7 +177,7 @@ impl Session {
 
     /// Switch the filter. Keeps the selection if still visible, else selects the first image.
     pub fn set_active(&mut self, view: u8) {
-        if view > WORKSPACES {
+        if view > UNBINNED {
             return;
         }
         self.active = view;
@@ -398,6 +409,21 @@ mod tests {
         assert_eq!(s.visible(), vec![0, 1, 2, 3]);
         assert!(s.toggle_manual_sort()); // the arrangement was remembered
         assert_eq!(s.visible(), vec![3, 1, 0, 2]);
+    }
+
+    #[test]
+    fn unbinned_view_is_a_shrinking_worklist() {
+        let mut s = session(4);
+        s.assign(1, Some(2));
+        s.set_active(UNBINNED);
+        assert_eq!(s.visible(), vec![0, 2, 3]);
+        assert_eq!(s.unbinned_count(), 3);
+        s.assign_marked(Some(1)); // image 0 goes, the next one is up
+        assert_eq!(s.visible(), vec![2, 3]);
+        assert_eq!(s.selected(), Some(2));
+        s.set_active(2);
+        s.assign_marked(None); // and back onto the pile
+        assert_eq!(s.unbinned_count(), 3);
     }
 
     #[test]

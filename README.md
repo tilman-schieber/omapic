@@ -50,6 +50,7 @@ always hints at the keys that matter in the current context; `?` shows all.
 | `a` | auto-advance on/off: binning moves on to the next image |
 | `Alt+1` … `Alt+9` | show only that workspace |
 | `Alt+0` | show all images |
+| `Alt+U`, ``Alt+` `` | show only what isn't binned yet — a worklist that empties as you go |
 | `s` | manual sorting on / off for the current view |
 | `Shift+←` `Shift+→`, `H` `L` | move the image backward / forward |
 | drag a thumbnail | reorder |

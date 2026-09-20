@@ -17,7 +17,7 @@ use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
 
 use crate::cli::{Input, file_name};
-use crate::model::{ImageId, Session, WORKSPACES};
+use crate::model::{ImageId, Session, UNBINNED, WORKSPACES};
 use crate::theme::{self, Theme};
 use crate::thumbs::{Thumbnail, Thumbnailer};
 use item::ImageItem;
@@ -38,6 +38,7 @@ const HELP: &str = "\
 <b>a</b>                  auto-advance: binning moves on to the next image
 <b>alt+1</b> … <b>alt+9</b>      show only that workspace
 <b>alt+0</b>              show all images
+<b>alt+u</b>  <b>alt+`</b>       show what is not binned yet
 <b>s</b>                  manual sorting on / off
 <b>shift+←→</b>  <b>H L</b>      move image backward / forward
 <b>drag</b>               reorder thumbnails
@@ -442,6 +443,14 @@ impl App {
             }
             self.strip.append(&label);
         }
+        let unbinned = session.unbinned_count();
+        if session.active() == UNBINNED || (unbinned > 0 && unbinned < session.images().len()) {
+            let label = gtk::Label::builder().label(format!("unbinned {unbinned}")).css_classes(["ws"]).build();
+            if session.active() == UNBINNED {
+                label.add_css_class("active");
+            }
+            self.strip.append(&label);
+        }
         let position = self.selected_position().map_or(0, |p| p + 1);
         let sort = if session.manual_sort() { "manual" } else { "natural" };
         let advance = if self.advance.get() { "  ·  bin→next" } else { "" };
@@ -479,7 +488,8 @@ impl App {
                 hints.extend([("←→", "browse"), ("z", "1:1"), ("1-9", "bin"), ("esc", "back")]);
             }
         } else {
-            hints.push(("1-9", if in_workspace { "rebin" } else { "bin" }));
+            let binned_view = (1..=WORKSPACES).contains(&session.active());
+            hints.push(("1-9", if binned_view { "rebin" } else { "bin" }));
             if session.selected().is_some_and(|id| session.image(id).workspace.is_some()) {
                 hints.push(("0", "unbin"));
             }
@@ -491,7 +501,7 @@ impl App {
             if in_workspace {
                 hints.extend([("alt+0", "all"), (":", "actions")]);
             } else {
-                hints.extend([("alt+1-9", "show bin"), ("enter", "enlarge"), (":", "commands")]);
+                hints.extend([("alt+1-9", "show bin"), ("alt+u", "unbinned"), ("enter", "enlarge"), (":", "commands")]);
             }
         }
         let markup: Vec<String> = hints
@@ -765,6 +775,7 @@ impl App {
 
         match (key, digit) {
             (_, Some(d)) if alt && !ctrl => self.show_workspace(d),
+            (Key::u | Key::grave | Key::dead_grave, _) if alt && !ctrl => self.show_workspace(UNBINNED),
             (_, Some(0)) if !ctrl => self.assign(None),
             (_, Some(d)) if !ctrl => self.assign(Some(d)),
             (Key::k, _) if ctrl => self.palette.open_commands(),
@@ -813,6 +824,7 @@ impl App {
     fn view_name(&self) -> String {
         match self.session.borrow().active() {
             0 => "all images".into(),
+            UNBINNED => "unbinned images".into(),
             n => format!("workspace {n}"),
         }
     }
