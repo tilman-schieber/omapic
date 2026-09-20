@@ -9,3 +9,4 @@ repository = "https://github.com/tilman-schieber/omapic"
 [dependencies]
 async-channel = "2.5.0"
 gtk = { version = "0.11.5", package = "gtk4", features = ["v4_12"] }
+turbojpeg = { version = "1.5.1", default-features = false, features = ["pkg-config"] }

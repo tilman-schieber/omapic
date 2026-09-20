@@ -59,7 +59,7 @@ fn cached(path: &Path, target: i32) -> Option<Quick> {
             continue; // stale: the image changed after it was thumbnailed
         }
         let Ok(texture) = gdk::Texture::from_filename(&file) else { continue };
-        let texture = adjust(&texture, 1, target).unwrap_or(texture);
+        let texture = adjust(&texture, 1, target, target / 4).unwrap_or(texture);
         return Some(Quick { texture, sharp: size * 4 >= target * 3 });
     }
     None
@@ -99,7 +99,7 @@ fn embedded(path: &Path, target: i32) -> Option<Quick> {
     let orientation = exif.orientation().map_or(1, |(_, _, value)| value);
     let bytes = glib::Bytes::from(&start[exif.thumbnail()?]);
     let texture = gdk::Texture::from_bytes(&bytes).ok()?;
-    let texture = adjust(&texture, orientation, target).unwrap_or(texture);
+    let texture = adjust(&texture, orientation, target, target / 4).unwrap_or(texture);
     // Typically 160 px and letterboxed: fine to look at for a moment, not to keep.
     Some(Quick { texture, sharp: false })
 }
@@ -118,16 +118,22 @@ pub fn texture_from_pixbuf(pixbuf: &Pixbuf) -> gdk::Texture {
     .into()
 }
 
+/// `texture` upright per EXIF `orientation` and no larger than `max`.
+pub fn fit(texture: gdk::Texture, orientation: u16, max: i32) -> gdk::Texture {
+    adjust(&texture, orientation, max, 0).unwrap_or(texture)
+}
+
 /// Turn a texture clockwise by quarter turns.
 pub fn rotate(texture: &gdk::Texture, quarters: u8) -> gdk::Texture {
-    let turned = adjust(texture, exif::turned(1, quarters), i32::MAX - i32::MAX / 4);
+    let turned = adjust(texture, exif::turned(1, quarters), i32::MAX, 0);
     turned.unwrap_or_else(|| texture.clone())
 }
 
 /// Apply an EXIF orientation and shrink to `max`. `None` when nothing had to change.
-fn adjust(texture: &gdk::Texture, orientation: u16, max: i32) -> Option<gdk::Texture> {
+/// `slack`: how far beyond `max` a texture may be before it is worth shrinking.
+fn adjust(texture: &gdk::Texture, orientation: u16, max: i32, slack: i32) -> Option<gdk::Texture> {
     let (width, height) = (texture.width(), texture.height());
-    let oversized = width.max(height) > max + max / 4;
+    let oversized = width.max(height) > max.saturating_add(slack);
     if orientation <= 1 && !oversized {
         return None;
     }

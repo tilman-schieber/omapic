@@ -16,6 +16,11 @@ use crate::quick;
 /// Small images are never scaled up. EXIF orientation is applied, then
 /// `quarters` clockwise turns on top (rotation pending in the session).
 pub fn decode(path: &Path, max: i32, quarters: u8) -> Option<gdk::Texture> {
+    if crate::cli::is_jpeg(path) {
+        if let Some(texture) = decode_jpeg(path, max, quarters) {
+            return Some(texture);
+        }
+    }
     let (_, width, height) = Pixbuf::file_info(path)?;
     let pixbuf = if width > max || height > max {
         Pixbuf::from_file_at_scale(path, max, max, true).ok()?
@@ -31,6 +36,43 @@ pub fn decode(path: &Path, max: i32, quarters: u8) -> Option<gdk::Texture> {
     };
     let pixbuf = pixbuf.rotate_simple(rotation).unwrap_or(pixbuf);
     Some(quick::texture_from_pixbuf(&pixbuf))
+}
+
+/// JPEGs through libjpeg-turbo, which can decode straight to 1/2, 1/4 or
+/// 1/8 size — several times faster than decoding everything and scaling.
+/// `None` (CMYK, damaged, not really a JPEG…) falls back to the generic loader.
+fn decode_jpeg(path: &Path, max: i32, quarters: u8) -> Option<gdk::Texture> {
+    let data = std::fs::read(path).ok()?;
+    let mut decompressor = turbojpeg::Decompressor::new().ok()?;
+    let header = decompressor.read_header(&data).ok()?;
+    let longest = header.width.max(header.height);
+    // The smallest size that still covers `max`; the rest is done by `fit`.
+    let factor = turbojpeg::Decompressor::supported_scaling_factors()
+        .into_iter()
+        .filter(|f| f.scale(longest) >= (max as usize).min(longest))
+        .min_by_key(|f| f.scale(longest))?;
+    decompressor.set_scaling_factor(factor).ok()?;
+    let size = header.scaled(factor);
+    let mut image = turbojpeg::Image {
+        pixels: vec![0u8; 3 * size.width * size.height],
+        width: size.width,
+        pitch: 3 * size.width,
+        height: size.height,
+        format: turbojpeg::PixelFormat::RGB,
+    };
+    decompressor.decompress(&data, image.as_deref_mut()).ok()?;
+    let texture: gdk::Texture = gdk::MemoryTexture::new(
+        size.width as i32,
+        size.height as i32,
+        gdk::MemoryFormat::R8g8b8,
+        &gtk::glib::Bytes::from_owned(image.pixels),
+        image.pitch,
+    )
+    .into();
+
+    let exif = crate::exif::Exif::find(&data[..data.len().min(128 * 1024)]);
+    let orientation = exif.and_then(|e| e.orientation()).map_or(1, |(_, _, value)| value);
+    Some(quick::fit(texture, crate::exif::turned(orientation, quarters), max))
 }
 
 /// Cheap sources first for everything on screen, real decodes after that.

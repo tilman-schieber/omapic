@@ -18,7 +18,7 @@ confirm it.
 
 ## Install
 
-    sudo pacman -S --needed rust gtk4 imagemagick
+    sudo pacman -S --needed rust gtk4 libjpeg-turbo imagemagick
     git clone https://github.com/tilman-schieber/omapic
     cd omapic
     cargo install --path .        # → ~/.cargo/bin/omapic
@@ -187,7 +187,9 @@ the window class is `org.omapic.Omapic`.
 Thumbnails come from worker threads, nearest-to-viewport first. Each image
 is first looked up in the freedesktop thumbnail cache (`~/.cache/thumbnails`,
 read but never written) and in its own EXIF data; an embedded preview is
-shown at once and replaced by a proper decode afterwards. Thumbnails live in
+shown at once and replaced by a proper decode afterwards. JPEGs are decoded
+by libjpeg-turbo directly at reduced size (about 4× faster than decoding in
+full); everything else goes through gdk-pixbuf. Thumbnails live in
 a bounded in-memory cache; full-size previews are decoded only on demand.
 
 Debug builds can be driven by a script for smoke tests, including rendering

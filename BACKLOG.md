@@ -10,8 +10,6 @@ or it is one more explicit action on a bin.
 ## Polish
 
 - **Packaging** — `.desktop` file with image MIME types, AUR `PKGBUILD`.
-- **Faster JPEG thumbnails** for files without embedded previews, e.g. DCT-scaled
-  decoding through libjpeg-turbo (adds a dependency; measure first).
 
 ## Deliberately out
 
