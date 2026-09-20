@@ -16,7 +16,7 @@ use std::time::Duration;
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
 
-use crate::cli::{Input, file_name};
+use crate::cli::{Input, SortKey, file_name};
 use crate::model::{ImageId, Session, UNBINNED, WORKSPACES};
 use crate::theme::{self, Theme};
 use crate::thumbs::{Thumbnail, Thumbnailer};
@@ -42,6 +42,7 @@ const HELP: &str = "\
 <b>alt+0</b>              show all images
 <b>alt+u</b>  <b>alt+`</b>       show what is not binned yet
 <b>s</b>                  manual sorting on / off
+<b>o</b>                  order by: natural → date taken → modified → size → name
 <b>shift+←→</b>  <b>H L</b>      move image backward / forward
 <b>drag</b>               reorder thumbnails
 <b>u</b>  <b>U</b> / <b>ctrl+r</b>      undo / redo binning, ordering, rotating
@@ -76,6 +77,7 @@ pub struct App {
     view: RefCell<Vec<ImageId>>,
     hovered: Cell<Option<ImageId>>,
     show_names: Cell<bool>,
+    sort_key: Cell<SortKey>,
     /// After binning an image, move on to the next one.
     advance: Cell<bool>,
     /// The file name label of every grid cell built so far.
@@ -194,6 +196,7 @@ pub fn build(application: &gtk::Application, input: Input, print: Option<char>) 
         view: RefCell::default(),
         hovered: Cell::new(None),
         show_names: Cell::new(false),
+        sort_key: Cell::new(SortKey::Input),
         advance: Cell::new(false),
         name_labels: RefCell::default(),
         enlarged: Cell::new(false),
@@ -480,7 +483,7 @@ impl App {
             self.strip.append(&label);
         }
         let position = self.selected_position().map_or(0, |p| p + 1);
-        let sort = if session.manual_sort() { "manual" } else { "natural" };
+        let sort = if session.manual_sort() { "manual" } else { self.sort_key.get().label() };
         let advance = if self.advance.get() { "  ·  bin→next" } else { "" };
         let rotated = match session.pending_rotations() {
             0 => String::new(),
@@ -804,6 +807,24 @@ impl App {
         self.say(if changed { what } else { "nothing to take back" }, false);
     }
 
+    /// `o`: what unsorted views are ordered by. Reads files, so off-thread.
+    fn cycle_sort_key(self: &Rc<Self>) {
+        let key = self.sort_key.get().next();
+        self.sort_key.set(key);
+        let paths: Vec<std::path::PathBuf> = self.session.borrow().images().iter().map(|e| e.path.clone()).collect();
+        let app = self.clone();
+        glib::spawn_future_local(async move {
+            let Ok(order) = gio::spawn_blocking(move || crate::cli::order(&paths, key)).await else { return };
+            if app.sort_key.get() == key {
+                app.session.borrow_mut().set_natural_order(order);
+                app.sync();
+                if app.session.borrow().manual_sort() {
+                    app.say(&format!("other views are now {}; this one is arranged by hand", key.label()), false);
+                }
+            }
+        });
+    }
+
     fn toggle_sort(self: &Rc<Self>) {
         self.session.borrow_mut().toggle_manual_sort();
         self.sync();
@@ -900,6 +921,7 @@ impl App {
             (Key::question, _) => self.palette.open_help(),
             (Key::q, _) => self.window.close(),
             (Key::s, _) => self.toggle_sort(),
+            (Key::o, _) => self.cycle_sort_key(),
             (Key::y, _) => self.yank(false),
             (Key::Y, _) => self.yank(true),
             (Key::r, _) => self.rotate(1),

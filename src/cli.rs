@@ -17,6 +17,71 @@ pub fn is_image(path: &Path) -> bool {
         .is_some_and(|e| EXTENSIONS.iter().any(|x| e.eq_ignore_ascii_case(x)))
 }
 
+/// What the unsorted ("natural") order goes by.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SortKey {
+    /// As given on the command line / found in the directory.
+    Input,
+    Taken,
+    Modified,
+    Size,
+    Name,
+}
+
+impl SortKey {
+    pub fn next(self) -> Self {
+        match self {
+            SortKey::Input => SortKey::Taken,
+            SortKey::Taken => SortKey::Modified,
+            SortKey::Modified => SortKey::Size,
+            SortKey::Size => SortKey::Name,
+            SortKey::Name => SortKey::Input,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            SortKey::Input => "natural",
+            SortKey::Taken => "by date taken",
+            SortKey::Modified => "by date modified",
+            SortKey::Size => "by size",
+            SortKey::Name => "by name",
+        }
+    }
+}
+
+/// Indices of `paths` in `key` order. Reads file metadata (and EXIF for
+/// `Taken`), so call it off the main thread. Ties keep their input order.
+pub fn order(paths: &[PathBuf], key: SortKey) -> Vec<usize> {
+    use std::io::Read;
+    let modified = |p: &Path| {
+        let time = p.metadata().and_then(|m| m.modified()).ok()?;
+        Some(time.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs())
+    };
+    // EXIF dates are local time without zone: "2024:05:01 12:30:00".
+    let local = |secs: u64| {
+        let time = gtk::glib::DateTime::from_unix_local(secs as i64).ok()?;
+        Some(time.format("%Y:%m:%d %H:%M:%S").ok()?.to_string())
+    };
+    let taken = |p: &Path| {
+        let mut head = Vec::new();
+        if is_jpeg(p) {
+            let _ = std::fs::File::open(p).map(|f| f.take(128 * 1024).read_to_end(&mut head));
+        }
+        let exif = crate::exif::Exif::find(&head).and_then(|e| e.text(crate::exif::DATE_TAKEN));
+        exif.or_else(|| local(modified(p)?)).unwrap_or_default()
+    };
+    let mut indices: Vec<usize> = (0..paths.len()).collect();
+    match key {
+        SortKey::Input => {}
+        SortKey::Name => indices.sort_by(|&a, &b| natural_cmp(&file_name(&paths[a]), &file_name(&paths[b]))),
+        SortKey::Taken => indices.sort_by_cached_key(|&i| taken(&paths[i])),
+        SortKey::Modified => indices.sort_by_cached_key(|&i| modified(&paths[i])),
+        SortKey::Size => indices.sort_by_cached_key(|&i| paths[i].metadata().map_or(0, |m| m.len())),
+    }
+    indices
+}
+
 pub fn is_jpeg(path: &Path) -> bool {
     let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
     extension.eq_ignore_ascii_case("jpg") || extension.eq_ignore_ascii_case("jpeg")
@@ -119,6 +184,26 @@ mod tests {
         let mut v = vec!["img10.jpg", "IMG2.jpg", "img1.jpg", "a.png", "img02.jpg"];
         v.sort_by(|a, b| natural_cmp(a, b));
         assert_eq!(v, ["a.png", "img1.jpg", "IMG2.jpg", "img02.jpg", "img10.jpg"]);
+    }
+
+    #[test]
+    fn ordering_by_file_properties() {
+        let dir = std::env::temp_dir().join(format!("omapic-order-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths: Vec<PathBuf> = [("b10.png", 30), ("a.png", 10), ("b9.png", 20)]
+            .iter()
+            .map(|(name, size)| {
+                let path = dir.join(name);
+                std::fs::write(&path, vec![0; *size]).unwrap();
+                path
+            })
+            .collect();
+        assert_eq!(order(&paths, SortKey::Input), [0, 1, 2]);
+        assert_eq!(order(&paths, SortKey::Name), [1, 2, 0]);
+        assert_eq!(order(&paths, SortKey::Size), [1, 2, 0]);
+        assert_eq!(order(&paths, SortKey::Taken).len(), 3);
+        assert_eq!(SortKey::Name.next(), SortKey::Input);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

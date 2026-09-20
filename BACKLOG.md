@@ -10,8 +10,6 @@ or it is one more explicit action on a bin.
 ## Polish
 
 - **Pan with the keyboard** while at actual pixels (e.g. `Shift`+arrows).
-- **Sort keys for the natural order** — `o` cycles name / mtime / size;
-  session-only. EXIF date since an EXIF reader exists now.
 - **Grid size** — `+` / `-`.
 - **Packaging** — `.desktop` file with image MIME types, AUR `PKGBUILD`.
 - **Animated GIF playback** in the preview, only if trivial with `gtk::MediaFile`.

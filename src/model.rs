@@ -45,6 +45,8 @@ const UNDO_DEPTH: usize = 200;
 #[derive(Debug)]
 pub struct Session {
     images: Vec<ImageEntry>,
+    /// The "natural" order: as given, unless re-sorted by some file property.
+    natural: Vec<ImageId>,
     views: Vec<Workspace>,
     active: u8,
     selected: Option<ImageId>,
@@ -56,11 +58,12 @@ pub struct Session {
 
 impl Session {
     pub fn new(paths: Vec<PathBuf>) -> Self {
-        let images = paths
+        let images: Vec<ImageEntry> = paths
             .into_iter()
             .map(|path| ImageEntry { path, workspace: None, rotation: 0, removed: false })
             .collect();
         Session {
+            natural: (0..images.len()).collect(),
             images,
             views: vec![Workspace::default(); UNBINNED as usize + 1],
             active: 0,
@@ -170,7 +173,7 @@ impl Session {
     }
 
     pub fn view_order(&self, view: u8) -> Vec<ImageId> {
-        let natural = (0..self.images.len()).filter(|&id| self.in_view(view, id));
+        let natural = self.natural.iter().copied().filter(|&id| self.in_view(view, id));
         let ws = &self.views[view as usize];
         if !ws.manual_sort_enabled {
             return natural.collect();
@@ -186,6 +189,17 @@ impl Session {
         }
         out.extend(natural.filter(|&id| !seen[id]));
         out
+    }
+
+    /// Re-sort what unsorted views show. `order` must list every image once;
+    /// manually arranged views keep their arrangement.
+    pub fn set_natural_order(&mut self, order: Vec<ImageId>) {
+        let mut seen = vec![false; self.images.len()];
+        let complete = order.len() == seen.len()
+            && order.iter().all(|&id| id < seen.len() && !std::mem::replace(&mut seen[id], true));
+        if complete {
+            self.natural = order;
+        }
     }
 
     pub fn select(&mut self, id: Option<ImageId>) {
@@ -499,6 +513,26 @@ mod tests {
         s.set_active(2);
         s.assign_marked(None); // and back onto the pile
         assert_eq!(s.unbinned_count(), 3);
+    }
+
+    #[test]
+    fn natural_order_can_be_resorted() {
+        let mut s = session(4);
+        s.assign(3, Some(1));
+        s.assign(0, Some(1));
+        s.set_natural_order(vec![3, 2, 1, 0]);
+        assert_eq!(s.visible(), vec![3, 2, 1, 0]);
+        assert_eq!(s.view_order(1), vec![3, 0]);
+        s.set_natural_order(vec![0, 1]); // incomplete: ignored
+        s.set_natural_order(vec![0, 0, 1, 2]); // not a permutation: ignored
+        assert_eq!(s.visible(), vec![3, 2, 1, 0]);
+
+        s.set_active(1);
+        s.move_to(0, 0); // manual: [0, 3]
+        s.set_natural_order(vec![0, 1, 2, 3]);
+        assert_eq!(s.visible(), vec![0, 3]);
+        s.toggle_manual_sort();
+        assert_eq!(s.visible(), vec![0, 3]);
     }
 
     #[test]

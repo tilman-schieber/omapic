@@ -59,6 +59,7 @@ always hints at the keys that matter in the current context; `?` shows all.
 | `Alt+1` … `Alt+9` | show only that workspace |
 | `Alt+0` | show all images |
 | `Alt+U`, ``Alt+` `` | show only what isn't binned yet — a worklist that empties as you go |
+| `o` | order unsorted views by: natural → date taken → date modified → size → name |
 | `s` | manual sorting on / off for the current view |
 | `Shift+←` `Shift+→`, `H` `L` | move the image backward / forward |
 | drag a thumbnail | reorder |
