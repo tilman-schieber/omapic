@@ -1,6 +1,8 @@
 //! Preview pane. Shows the thumbnail at once, then swaps in a full decode
 //! made off the main thread, and decodes the neighbours ahead of time so
-//! stepping through images is instant.
+//! stepping through images is instant. `z` switches between fit-to-pane and
+//! actual pixels; the latter pans by dragging and keeps its position from
+//! image to image, for comparing near-duplicates.
 
 use std::cell::{Cell, RefCell};
 use std::collections::{HashSet, VecDeque};
@@ -30,10 +32,20 @@ struct Full {
 
 pub struct Preview {
     pub root: gtk::Box,
+    scroller: gtk::ScrolledWindow,
     picture: gtk::Picture,
     caption: gtk::Label,
     target: Cell<Option<ImageId>>,
+    target_path: RefCell<PathBuf>,
     has_full: Cell<bool>,
+    /// One image pixel per screen pixel instead of fit-to-pane.
+    actual_size: Cell<bool>,
+    /// Undownscaled decode of the target, when the cached one isn't.
+    original: RefCell<Option<(ImageId, gdk::Texture)>>,
+    /// Last pointer position over the pane.
+    pointer: Cell<Option<(f64, f64)>>,
+    /// Scroll values to apply once the adjustments have grown: (value, needed upper).
+    pending_scroll: [Cell<Option<(f64, f64)>>; 2],
     generation: Cell<u64>,
     cache: RefCell<VecDeque<Full>>,
     loading: RefCell<HashSet<ImageId>>,
@@ -55,18 +67,167 @@ impl Preview {
             .ellipsize(gtk::pango::EllipsizeMode::Middle)
             .css_classes(["caption"])
             .build();
-        root.append(&picture);
+        let scroller = gtk::ScrolledWindow::builder().child(&picture).vexpand(true).hexpand(true).build();
+        root.append(&scroller);
         root.append(&caption);
-        Rc::new(Preview {
+        let preview = Rc::new(Preview {
             root,
+            scroller,
             picture,
             caption,
             target: Cell::new(None),
+            target_path: RefCell::default(),
             has_full: Cell::new(false),
+            actual_size: Cell::new(false),
+            original: RefCell::default(),
+            pointer: Cell::new(None),
+            pending_scroll: Default::default(),
             generation: Cell::new(0),
             cache: RefCell::default(),
             loading: RefCell::default(),
+        });
+        preview.connect_panning();
+        preview
+    }
+
+    fn adjustments(&self) -> [gtk::Adjustment; 2] {
+        [self.scroller.hadjustment(), self.scroller.vadjustment()]
+    }
+
+    fn connect_panning(self: &Rc<Self>) {
+        let motion = gtk::EventControllerMotion::new();
+        let this = Rc::downgrade(self);
+        motion.connect_motion(move |_, x, y| {
+            if let Some(this) = this.upgrade() {
+                this.pointer.set(Some((x, y)));
+            }
+        });
+        let this = Rc::downgrade(self);
+        motion.connect_leave(move |_| {
+            if let Some(this) = this.upgrade() {
+                this.pointer.set(None);
+            }
+        });
+        self.scroller.add_controller(motion);
+
+        let drag = gtk::GestureDrag::new();
+        let start = Rc::new(Cell::new((0.0, 0.0)));
+        let (this, from) = (Rc::downgrade(self), start.clone());
+        drag.connect_drag_begin(move |_, _, _| {
+            if let Some(this) = this.upgrade() {
+                let [h, v] = this.adjustments();
+                from.set((h.value(), v.value()));
+            }
+        });
+        let this = Rc::downgrade(self);
+        drag.connect_drag_update(move |_, dx, dy| {
+            if let Some(this) = this.upgrade().filter(|t| t.actual_size.get()) {
+                let [h, v] = this.adjustments();
+                h.set_value(start.get().0 - dx);
+                v.set_value(start.get().1 - dy);
+            }
+        });
+        self.scroller.add_controller(drag);
+
+        // A freshly enlarged picture only becomes scrollable after layout.
+        for (axis, adjustment) in self.adjustments().into_iter().enumerate() {
+            let this = Rc::downgrade(self);
+            adjustment.connect_changed(move |adjustment| {
+                let Some(this) = this.upgrade() else { return };
+                if let Some((value, upper)) = this.pending_scroll[axis].get() {
+                    if adjustment.upper() >= upper - 1.0 {
+                        this.pending_scroll[axis].set(None);
+                        adjustment.set_value(value);
+                    }
+                }
+            });
+        }
+    }
+
+    pub fn is_actual_size(&self) -> bool {
+        self.actual_size.get()
+    }
+
+    pub fn fit(&self) {
+        self.actual_size.set(false);
+        self.original.take();
+        self.pending_scroll.iter().for_each(|p| p.set(None));
+        self.layout();
+    }
+
+    /// Switch to actual pixels, keeping the spot under the pointer in place.
+    pub fn actual_size(self: &Rc<Self>) {
+        let Some(id) = self.target.get() else { return };
+        let Some((width, height)) = self.dimensions(id) else { return };
+        let (pane_w, pane_h) = (self.scroller.width() as f64, self.scroller.height() as f64);
+        let scale = self.screen_scale();
+        let (full_w, full_h) = (width as f64 / scale, height as f64 / scale);
+        // Where the image sits while fitted, to find the spot under the pointer.
+        let shrink = (pane_w / full_w).min(pane_h / full_h).min(1.0);
+        let (fit_w, fit_h) = (full_w * shrink, full_h * shrink);
+        let (x, y) = self.pointer.get().unwrap_or((pane_w / 2.0, pane_h / 2.0));
+        let spot_x = ((x - (pane_w - fit_w) / 2.0) / fit_w).clamp(0.0, 1.0);
+        let spot_y = ((y - (pane_h - fit_h) / 2.0) / fit_h).clamp(0.0, 1.0);
+        self.pending_scroll[0].set(Some((spot_x * full_w - x, full_w)));
+        self.pending_scroll[1].set(Some((spot_y * full_h - y, full_h)));
+        self.actual_size.set(true);
+        self.layout();
+        self.fetch_original(id);
+    }
+
+    fn screen_scale(&self) -> f64 {
+        self.root.native().and_then(|n| n.surface()).map_or(1.0, |s| s.scale())
+    }
+
+    fn dimensions(&self, id: ImageId) -> Option<(i32, i32)> {
+        self.cached_dimensions(id).or_else(|| {
+            let paintable = self.picture.paintable()?;
+            Some((paintable.intrinsic_width(), paintable.intrinsic_height()))
         })
+    }
+
+    /// Size and fit of the picture for the current mode and image.
+    fn layout(&self) {
+        let dimensions = self.target.get().and_then(|id| self.dimensions(id));
+        match dimensions.filter(|_| self.actual_size.get()) {
+            Some((width, height)) => {
+                let scale = self.screen_scale();
+                let (w, h) = ((width as f64 / scale).round() as i32, (height as f64 / scale).round() as i32);
+                self.picture.set_size_request(w, h);
+                self.picture.set_halign(gtk::Align::Center);
+                self.picture.set_valign(gtk::Align::Center);
+                self.picture.set_content_fit(gtk::ContentFit::Contain);
+                self.picture.set_cursor_from_name(Some("grab"));
+            }
+            None => {
+                self.picture.set_size_request(-1, -1);
+                self.picture.set_halign(gtk::Align::Fill);
+                self.picture.set_valign(gtk::Align::Fill);
+                // Scaled-up thumbnails look better than a flash of nothing;
+                // real images are never blown up.
+                let fit = if self.has_full.get() { gtk::ContentFit::ScaleDown } else { gtk::ContentFit::Contain };
+                self.picture.set_content_fit(fit);
+                self.picture.set_cursor(None::<&gdk::Cursor>);
+            }
+        }
+    }
+
+    /// Previews are capped at `MAX_EDGE`; actual size deserves every pixel.
+    fn fetch_original(self: &Rc<Self>, id: ImageId) {
+        let downscaled = self.cached_dimensions(id).is_some_and(|(w, h)| w.max(h) > MAX_EDGE);
+        if !downscaled || self.original.borrow().as_ref().is_some_and(|(have, _)| *have == id) {
+            return;
+        }
+        let (this, path) = (self.clone(), self.target_path.borrow().clone());
+        glib::spawn_future_local(async move {
+            let loaded = gio::spawn_blocking(move || thumbs::decode(&path, i32::MAX)).await;
+            if let Ok(Some(texture)) = loaded {
+                if this.target.get() == Some(id) && this.actual_size.get() {
+                    this.picture.set_paintable(Some(&texture));
+                    this.original.replace(Some((id, texture)));
+                }
+            }
+        });
     }
 
     pub fn clear(&self) {
@@ -74,6 +235,7 @@ impl Preview {
         self.generation.set(self.generation.get() + 1);
         self.picture.set_paintable(gdk::Paintable::NONE);
         self.caption.set_label("");
+        self.layout();
     }
 
     /// The thumbnail arrived after the preview was requested.
@@ -96,19 +258,21 @@ impl Preview {
             return;
         }
         self.target.set(Some(id));
+        self.target_path.replace(path.clone());
+        self.original.take();
         let generation = self.generation.get() + 1;
         self.generation.set(generation);
 
         if self.display_cached(id, &path) {
+            self.fetch_original(id);
             for (id, path) in neighbours {
                 self.fetch(id, path, Vec::new());
             }
             return;
         }
         self.has_full.set(false);
-        // Scaled-up thumbnails look better than a flash of nothing.
-        self.picture.set_content_fit(gtk::ContentFit::Contain);
         self.picture.set_paintable(placeholder.as_ref());
+        self.layout();
         self.caption_for(&path, None);
 
         let this = Rc::downgrade(self);
@@ -121,14 +285,16 @@ impl Preview {
 
     /// Show `id` from the cache, marking it most recently used.
     fn display_cached(&self, id: ImageId, path: &std::path::Path) -> bool {
-        let mut cache = self.cache.borrow_mut();
-        let Some(index) = cache.iter().position(|f| f.id == id) else { return false };
-        let full = cache.remove(index).unwrap();
-        self.has_full.set(true);
-        self.picture.set_content_fit(gtk::ContentFit::ScaleDown);
-        self.picture.set_paintable(Some(&full.texture));
-        self.caption_for(path, Some(full.dimensions));
-        cache.push_back(full);
+        {
+            let mut cache = self.cache.borrow_mut();
+            let Some(index) = cache.iter().position(|f| f.id == id) else { return false };
+            let full = cache.remove(index).unwrap();
+            self.has_full.set(true);
+            self.picture.set_paintable(Some(&full.texture));
+            self.caption_for(path, Some(full.dimensions));
+            cache.push_back(full);
+        }
+        self.layout();
         true
     }
 
@@ -162,6 +328,7 @@ impl Preview {
                 }
                 if this.target.get() == Some(id) && !this.has_full.get() {
                     this.display_cached(id, &path);
+                    this.fetch_original(id);
                 }
             }
             for (id, path) in then {

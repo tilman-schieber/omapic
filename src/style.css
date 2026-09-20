@@ -64,9 +64,9 @@ gridview.grid > child:selected .name { color: @om_foreground; }
 /* ── preview ──────────────────────────────────────────── */
 
 .preview { padding: 12px 12px 6px 12px; }
-.preview.zoomed { padding: 0; background: @om_dark_background; }
+.preview.enlarged { padding: 0; background: @om_dark_background; }
 .preview .caption { padding-top: 8px; color: @om_muted; }
-.preview.zoomed .caption { padding: 6px; }
+.preview.enlarged .caption { padding: 6px; }
 
 /* ── status line ──────────────────────────────────────── */
 

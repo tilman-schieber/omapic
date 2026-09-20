@@ -43,6 +43,7 @@ always hints at the keys that matter in the current context; `?` shows all.
 | arrows, `h` `j` `k` `l` | move around the grid |
 | `Home` `End`, `g` `G` | first / last image |
 | `Enter`, `Space` | enlarge preview (`Esc` to go back) |
+| `z` | actual pixels at the pointer; drag to pan, position is kept from image to image |
 | `1` … `9` | put the selected image into that workspace |
 | `0` | take it out of its workspace |
 | `Alt+1` … `Alt+9` | show only that workspace |

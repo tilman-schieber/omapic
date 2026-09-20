@@ -31,6 +31,7 @@ const HELP: &str = "\
 <b>←↓↑→</b>  <b>h j k l</b>      move around the grid
 <b>home end</b>  <b>g G</b>      first / last image
 <b>enter</b>  <b>space</b>       enlarge preview
+<b>z</b>                  actual pixels at the pointer; drag to pan
 <b>1</b> … <b>9</b>              put image into workspace
 <b>0</b>                  take image out of its workspace
 <b>alt+1</b> … <b>alt+9</b>      show only that workspace
@@ -68,7 +69,7 @@ pub struct App {
     show_names: Cell<bool>,
     /// The file name label of every grid cell built so far.
     name_labels: RefCell<Vec<glib::WeakRef<gtk::Label>>>,
-    zoomed: Cell<bool>,
+    enlarged: Cell<bool>,
     syncing: Cell<bool>,
     css: gtk::CssProvider,
     theme_monitor: RefCell<Option<gio::FileMonitor>>,
@@ -186,7 +187,7 @@ pub fn build(application: &gtk::Application, input: Input) {
         hovered: Cell::new(None),
         show_names: Cell::new(false),
         name_labels: RefCell::default(),
-        zoomed: Cell::new(false),
+        enlarged: Cell::new(false),
         syncing: Cell::new(false),
         css,
         theme_monitor: RefCell::default(),
@@ -247,7 +248,7 @@ impl App {
         let weak = Rc::downgrade(self);
         self.grid.connect_activate(move |_, _| {
             if let Some(app) = weak.upgrade() {
-                app.toggle_zoom();
+                app.toggle_enlarged();
             }
         });
 
@@ -374,7 +375,7 @@ impl App {
         let target = self
             .hovered
             .get()
-            .filter(|_| !self.zoomed.get())
+            .filter(|_| !self.enlarged.get())
             .or(session.selected());
         match target {
             Some(id) => {
@@ -442,8 +443,12 @@ impl App {
             if in_workspace {
                 hints.push(("alt+0", "all images"));
             }
-        } else if self.zoomed.get() {
-            hints.extend([("←→", "browse"), ("1-9", "bin"), ("esc", "back")]);
+        } else if self.enlarged.get() {
+            if self.preview.is_actual_size() {
+                hints.extend([("drag", "pan"), ("z", "fit"), ("←→", "compare")]);
+            } else {
+                hints.extend([("←→", "browse"), ("z", "1:1"), ("1-9", "bin"), ("esc", "back")]);
+            }
         } else {
             hints.push(("1-9", if in_workspace { "rebin" } else { "bin" }));
             if session.selected().is_some_and(|id| session.image(id).workspace.is_some()) {
@@ -585,7 +590,7 @@ impl App {
         };
         let mut target = current.saturating_add_signed(columns).min(len - 1);
         if rows != 0 {
-            let width = if self.zoomed.get() { 1 } else { self.columns() };
+            let width = if self.enlarged.get() { 1 } else { self.columns() };
             let step = rows * width as isize;
             let moved = current as isize + step;
             if moved >= 0 && (moved as usize) < len {
@@ -646,14 +651,28 @@ impl App {
         });
     }
 
-    fn toggle_zoom(self: &Rc<Self>) {
-        let zoomed = !self.zoomed.get();
-        self.zoomed.set(zoomed);
-        self.scroller.set_visible(!zoomed);
-        if zoomed {
-            self.preview.root.add_css_class("zoomed");
+    /// `z`: actual pixels ↔ fit, enlarging the preview first if need be.
+    fn toggle_actual_size(self: &Rc<Self>) {
+        if self.preview.is_actual_size() {
+            self.preview.fit();
         } else {
-            self.preview.root.remove_css_class("zoomed");
+            if !self.enlarged.get() {
+                self.toggle_enlarged();
+            }
+            self.preview.actual_size();
+        }
+        self.update_hints();
+    }
+
+    fn toggle_enlarged(self: &Rc<Self>) {
+        let enlarged = !self.enlarged.get();
+        self.enlarged.set(enlarged);
+        self.scroller.set_visible(!enlarged);
+        if enlarged {
+            self.preview.root.add_css_class("enlarged");
+        } else {
+            self.preview.root.remove_css_class("enlarged");
+            self.preview.fit();
             self.grid.grab_focus();
         }
         self.hovered.set(None);
@@ -701,8 +720,10 @@ impl App {
                 let len = self.view.borrow().len();
                 self.select_position(len.saturating_sub(1));
             }
-            (Key::Return | Key::KP_Enter | Key::space, _) => self.toggle_zoom(),
-            (Key::Escape, _) if self.zoomed.get() => self.toggle_zoom(),
+            (Key::Return | Key::KP_Enter | Key::space, _) => self.toggle_enlarged(),
+            (Key::z, _) => self.toggle_actual_size(),
+            (Key::Escape, _) if self.preview.is_actual_size() => self.toggle_actual_size(),
+            (Key::Escape, _) if self.enlarged.get() => self.toggle_enlarged(),
             _ => return glib::Propagation::Proceed,
         }
         glib::Propagation::Stop
