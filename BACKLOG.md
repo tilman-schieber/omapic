@@ -9,7 +9,6 @@ or it is one more explicit action on a bin.
 
 ## Polish
 
-- **Grid size** — `+` / `-`.
 - **Packaging** — `.desktop` file with image MIME types, AUR `PKGBUILD`.
 - **Animated GIF playback** in the preview, only if trivial with `gtk::MediaFile`.
 - **Faster JPEG thumbnails** for files without embedded previews, e.g. DCT-scaled

@@ -8,8 +8,9 @@ use gtk::{gdk, glib};
 use super::App;
 use super::item::ImageItem;
 
-/// Logical size of a thumbnail cell.
-pub const CELL: i32 = 168;
+/// Logical sizes a thumbnail cell can have (`-` / `+`), and the one to start with.
+pub const CELLS: [i32; 5] = [96, 128, 168, 224, 300];
+pub const CELL: i32 = CELLS[2];
 
 fn item_of(list_item: &glib::WeakRef<gtk::ListItem>) -> Option<ImageItem> {
     list_item.upgrade()?.item().and_downcast::<ImageItem>()
@@ -37,8 +38,6 @@ pub fn factory(app: &Rc<App>) -> gtk::SignalListItemFactory {
             .child(&image)
             .obey_child(false)
             .ratio(1.5)
-            .width_request(CELL)
-            .height_request(CELL)
             .build();
         picture.connect_paintable_notify(glib::clone!(
             #[weak]
@@ -59,7 +58,7 @@ pub fn factory(app: &Rc<App>) -> gtk::SignalListItemFactory {
         cell.append(&name);
         list_item.set_child(Some(&cell));
         if let Some(app) = weak.upgrade() {
-            app.register_name_label(&name);
+            app.register_cell(&frame, &name);
         }
 
         let item = list_item.property_expression("item");

@@ -65,6 +65,7 @@ always hints at the keys that matter in the current context; `?` shows all.
 | drag a thumbnail | reorder |
 | `u` / `U`, `Ctrl+R` | undo / redo binning, ordering, rotating and sort toggles (never file operations) |
 | `y` / `Y` | copy the path of the selected image(s) / of everything shown to the clipboard (paste while omapic is open, unless a clipboard manager keeps it) |
+| `+` / `-` | larger / smaller thumbnails |
 | `f` | file names under thumbnails |
 | `i` | file and camera info (size, dates, camera, exposure) under the preview |
 | `:` or `Ctrl+K` | command palette |

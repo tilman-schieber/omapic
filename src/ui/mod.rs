@@ -47,6 +47,7 @@ const HELP: &str = "\
 <b>drag</b>               reorder thumbnails
 <b>u</b>  <b>U</b> / <b>ctrl+r</b>      undo / redo binning, ordering, rotating
 <b>y</b>  <b>Y</b>               copy path of the image(s) / of everything shown
+<b>+</b>  <b>-</b>               larger / smaller thumbnails
 <b>f</b>                  file names under thumbnails
 <b>i</b>                  file and camera info under the preview
 <b>:</b>  <b>ctrl+k</b>          commands
@@ -80,8 +81,13 @@ pub struct App {
     sort_key: Cell<SortKey>,
     /// After binning an image, move on to the next one.
     advance: Cell<bool>,
-    /// The file name label of every grid cell built so far.
-    name_labels: RefCell<Vec<glib::WeakRef<gtk::Label>>>,
+    /// Frame and file name label of every grid cell built so far.
+    cells: RefCell<Vec<(glib::WeakRef<gtk::AspectFrame>, glib::WeakRef<gtk::Label>)>>,
+    /// Logical cell size, one of `grid::CELLS`.
+    cell_size: Cell<i32>,
+    /// Device pixels per logical pixel, and the largest size decoded for so far.
+    scale: i32,
+    decoded_for: Cell<i32>,
     enlarged: Cell<bool>,
     syncing: Cell<bool>,
     css: gtk::CssProvider,
@@ -198,7 +204,10 @@ pub fn build(application: &gtk::Application, input: Input, print: Option<char>) 
         show_names: Cell::new(false),
         sort_key: Cell::new(SortKey::Input),
         advance: Cell::new(false),
-        name_labels: RefCell::default(),
+        cells: RefCell::default(),
+        cell_size: Cell::new(grid::CELL),
+        scale,
+        decoded_for: Cell::new(grid::CELL),
         enlarged: Cell::new(false),
         syncing: Cell::new(false),
         css,
@@ -848,16 +857,57 @@ impl App {
         self.sync();
     }
 
-    fn register_name_label(&self, label: &gtk::Label) {
-        label.set_visible(self.show_names.get());
-        self.name_labels.borrow_mut().push(label.downgrade());
+    fn register_cell(&self, frame: &gtk::AspectFrame, name: &gtk::Label) {
+        frame.set_size_request(self.cell_size.get(), self.cell_size.get());
+        name.set_visible(self.show_names.get());
+        self.cells.borrow_mut().push((frame.downgrade(), name.downgrade()));
+    }
+
+    /// Bring every cell built so far in line with size and name settings.
+    fn restyle_cells(&self) {
+        let (size, names) = (self.cell_size.get(), self.show_names.get());
+        self.cells.borrow_mut().retain(|(frame, name)| {
+            let Some((frame, name)) = frame.upgrade().zip(name.upgrade()) else { return false };
+            frame.set_size_request(size, size);
+            name.set_visible(names);
+            true
+        });
     }
 
     fn toggle_names(&self) {
-        let show = !self.show_names.get();
-        self.show_names.set(show);
-        self.name_labels.borrow_mut().retain(|label| {
-            label.upgrade().inspect(|l| l.set_visible(show)).is_some()
+        self.show_names.set(!self.show_names.get());
+        self.restyle_cells();
+    }
+
+    /// `+` / `-`: step through the cell sizes.
+    fn resize_cells(self: &Rc<Self>, step: isize) {
+        let sizes = grid::CELLS;
+        let current = sizes.iter().position(|&s| s == self.cell_size.get()).unwrap_or(0);
+        let size = sizes[current.saturating_add_signed(step).min(sizes.len() - 1)];
+        if size == self.cell_size.get() {
+            return;
+        }
+        self.cell_size.set(size);
+        self.restyle_cells();
+        if size > self.decoded_for.get() {
+            // What is loaded was decoded for smaller cells: keep it as a
+            // stand-in and fetch sharper versions of what is on screen.
+            self.decoded_for.set(size);
+            self.thumbs.set_size(size * self.scale);
+            self.items.iter().for_each(|item| item.set_sharp(false));
+            let (session, view) = (self.session.borrow(), self.view.borrow());
+            for &id in self.bound.borrow().iter() {
+                if let Some(position) = view.iter().position(|&x| x == id) {
+                    let standin = self.items[id].texture().is_some();
+                    self.thumbs.request(id, session.image(id).path.clone(), position, standin);
+                }
+            }
+        }
+        let weak = Rc::downgrade(self);
+        glib::idle_add_local_once(move || {
+            if let Some(app) = weak.upgrade() {
+                app.scroll_to_selected();
+            }
         });
     }
 
@@ -935,6 +985,8 @@ impl App {
             (Key::u, _) => self.undo(false),
             (Key::U, _) => self.undo(true),
             (Key::f, _) => self.toggle_names(),
+            (Key::plus | Key::equal | Key::KP_Add, _) => self.resize_cells(1),
+            (Key::minus | Key::KP_Subtract, _) => self.resize_cells(-1),
             (Key::i, _) => self.preview.toggle_info(),
             // At actual pixels the reorder keys pan instead.
             (Key::Left | Key::H, _) if shift && panning => self.preview.pan(-0.25, 0.0),

@@ -3,7 +3,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
 use gtk::gdk;
@@ -67,19 +67,23 @@ pub struct Thumbnailer {
     jobs: Arc<(Mutex<Jobs>, Condvar)>,
     /// Grid position at the centre of the viewport; nearby jobs go first.
     focus: Arc<AtomicUsize>,
+    /// Longest edge thumbnails are decoded to, in device pixels.
+    size: Arc<AtomicI32>,
 }
 
 impl Thumbnailer {
     pub fn new(size: i32) -> (Self, async_channel::Receiver<Thumbnail>) {
         let jobs: Arc<(Mutex<Jobs>, Condvar)> = Arc::default();
         let focus = Arc::new(AtomicUsize::new(0));
+        let size = Arc::new(AtomicI32::new(size));
         let (tx, rx) = async_channel::unbounded();
         let workers = std::thread::available_parallelism().map_or(2, |n| n.get().clamp(2, 8));
         for _ in 0..workers {
-            let (jobs, tx, focus) = (jobs.clone(), tx.clone(), focus.clone());
+            let (jobs, tx, focus, size) = (jobs.clone(), tx.clone(), focus.clone(), size.clone());
             std::thread::spawn(move || {
                 loop {
                     let job = next_job(&jobs, &focus);
+                    let size = size.load(Ordering::Relaxed);
                     let result = match job.stage {
                         Stage::Quick => match quick::find(&job.path, size) {
                             Some(found) if found.sharp => {
@@ -104,7 +108,11 @@ impl Thumbnailer {
                 }
             });
         }
-        (Thumbnailer { jobs, focus }, rx)
+        (Thumbnailer { jobs, focus, size }, rx)
+    }
+
+    pub fn set_size(&self, size: i32) {
+        self.size.store(size, Ordering::Relaxed);
     }
 
     pub fn set_focus(&self, position: usize) {
