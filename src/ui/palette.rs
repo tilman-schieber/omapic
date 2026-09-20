@@ -45,7 +45,7 @@ impl Palette {
             .orientation(gtk::Orientation::Vertical)
             .halign(gtk::Align::Center)
             .valign(gtk::Align::Start)
-            .margin_top(96)
+            .margin_top(40)
             .width_request(620)
             .visible(false)
             .focusable(true)

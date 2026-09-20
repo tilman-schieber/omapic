@@ -26,7 +26,7 @@ confirm it.
 Or as a package, which also installs the desktop entry ("Open with omapic"
 in file managers) and icon:
 
-    cd pkg && makepkg -si
+    cd pkg && makepkg -si      # add -d if your cargo comes from rustup/mise rather than pacman
 
 Without the package, the desktop entry can be installed by hand:
 
