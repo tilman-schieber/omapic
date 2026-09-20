@@ -10,6 +10,7 @@ use super::App;
 use crate::cli::file_name;
 use crate::fsops::{self, Op};
 use crate::montage::{self, ContactSheet};
+use crate::{history, shell};
 use crate::theme::Theme;
 
 #[derive(Clone, Copy)]
@@ -18,6 +19,7 @@ enum Command {
     Rename,
     ContactSheet,
     SaveRotations,
+    Shell,
     Trash,
     OpenFolder,
     Unbin,
@@ -32,6 +34,7 @@ const COMMANDS: &[(&str, Command)] = &[
     ("Rename files in workspace according to current order…", Command::Rename),
     ("Create contact sheet…", Command::ContactSheet),
     ("Save rotations to files…", Command::SaveRotations),
+    ("Run shell command on workspace…", Command::Shell),
     ("Move workspace to trash…", Command::Trash),
     ("Open containing folder", Command::OpenFolder),
     ("Remove selected image from workspace", Command::Unbin),
@@ -43,8 +46,19 @@ pub fn titles() -> Vec<&'static str> {
 }
 
 pub async fn run(app: Rc<App>, index: usize) {
-    let Some(&(_, command)) = COMMANDS.get(index) else { return };
+    if let Some(&(_, command)) = COMMANDS.get(index) {
+        execute(app, command).await;
+    }
+}
+
+/// `!` goes straight to the shell prompt.
+pub async fn run_shell(app: Rc<App>) {
+    execute(app, Command::Shell).await;
+}
+
+async fn execute(app: Rc<App>, command: Command) {
     let result = match command {
+        Command::Shell => shell(&app).await,
         Command::Transfer(op) => transfer(&app, op).await,
         Command::Rename => rename(&app).await,
         Command::ContactSheet => contact_sheet(&app).await,
@@ -206,6 +220,65 @@ async fn save_rotations(app: &Rc<App>) -> Outcome {
     match results.into_iter().find_map(|(_, r)| r.err()) {
         Some(problem) => Err(format!("saved {}, but {problem}", saved.len())),
         None => Ok(Some(format!("rotation of {} files saved", saved.len()))),
+    }
+}
+
+/// Run a shell command over the shown images, per file or all at once.
+async fn shell(app: &Rc<App>) -> Outcome {
+    let files = app.visible_files();
+    if files.is_empty() {
+        return Err(format!("{} is empty", app.view_name()));
+    }
+    let history_file = history::default_path();
+    let mut offers: Vec<(String, String)> = history_file
+        .as_deref()
+        .map(history::load)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|line| (line, "history".to_string()))
+        .collect();
+    let suggestions = shell::SUGGESTIONS.iter().filter(|(line, _)| offers.iter().all(|(h, _)| h != line));
+    let suggestions: Vec<_> = suggestions.map(|(line, note)| (line.to_string(), note.to_string())).collect();
+    offers.extend(suggestions);
+
+    let title = format!("Shell command on {} ({} files, in display order)", app.view_name(), files.len());
+    let Some(template) = app.palette.ask_with_offers(&title, shell::PLACEHOLDERS, offers).await else {
+        return Ok(None);
+    };
+    if template.trim().is_empty() {
+        return Ok(None);
+    }
+    let paths: Vec<PathBuf> = files.iter().map(|(_, p)| p.clone()).collect();
+    let jobs = shell::expand(&template, &paths)?;
+
+    const SHOWN: usize = 3;
+    let mut lines: Vec<String> = jobs.iter().take(SHOWN).map(|job| job.line.clone()).collect();
+    if jobs.len() > SHOWN {
+        lines.push(format!("… and {} more", jobs.len() - SHOWN));
+    }
+    lines.push(format!("in {}", jobs[0].cwd.display()));
+    let runs = if jobs.len() == 1 { "Run this command?".to_string() } else { format!("Run these {} commands?", jobs.len()) };
+    if app.palette.confirm(&runs, &lines.join("\n"), false).await != Some(true) {
+        return Ok(None);
+    }
+    if let Some(file) = &history_file {
+        let _ = history::remember(file, &template); // convenience only
+    }
+
+    app.say("running…", false);
+    let total = jobs.len();
+    let failures = gio::spawn_blocking(move || {
+        jobs.iter().filter_map(|job| shell::run(job).err()).collect::<Vec<String>>()
+    })
+    .await
+    .map_err(|_| "shell command crashed".to_string())?;
+
+    let ids: Vec<usize> = files.iter().map(|(id, _)| *id).collect();
+    app.files_changed(&ids);
+    match failures.first() {
+        Some(first) => Err(format!("{} of {total} failed: {first}", failures.len())),
+        None if total == 1 => Ok(Some("command finished".into())),
+        None => Ok(Some(format!("{total} commands finished"))),
     }
 }
 

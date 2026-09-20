@@ -108,5 +108,7 @@ gridview.grid > child:selected .name { color: @om_foreground; }
 .palette-list { margin-top: 8px; background: transparent; }
 .palette-list row { padding: 5px 6px; border-radius: 0; color: @om_foreground; outline: none; }
 .palette-list row:selected { background: @om_selection; color: @om_accent; }
+.palette-note { color: @om_muted; font-size: 9pt; }
+.palette-list row:selected .palette-note { color: @om_foreground; }
 .palette-help { padding: 2px 6px; color: @om_foreground; }
 .palette-hint { padding: 8px 6px 0 6px; color: @om_muted; font-size: 8pt; }

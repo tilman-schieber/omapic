@@ -48,6 +48,7 @@ const HELP: &str = "\
 <b>y</b>  <b>Y</b>               copy path of the image(s) / of everything shown
 <b>f</b>                  file names under thumbnails
 <b>:</b>  <b>ctrl+k</b>          commands
+<b>!</b>                  run a shell command on the images shown
 <b>?</b>                  this sheet
 <b>q</b>                  quit";
 
@@ -726,6 +727,28 @@ impl App {
         self.sync();
     }
 
+    /// A command rewrote these files (or made them disappear): look again.
+    fn files_changed(self: &Rc<Self>, ids: &[ImageId]) {
+        let vanished: Vec<ImageId> =
+            ids.iter().copied().filter(|&id| !self.session.borrow().image(id).path.exists()).collect();
+        self.session.borrow_mut().remove(&vanished);
+        self.thumb_order.borrow_mut().retain(|id| !ids.contains(id));
+        for &id in ids {
+            let item = &self.items[id];
+            item.set_texture(gdk::Texture::NONE);
+            item.set_sharp(false);
+            item.set_failed(false);
+            self.preview.forget(id);
+        }
+        self.sync();
+        let view = self.view.borrow();
+        for &id in ids.iter().filter(|id| self.bound.borrow().contains(id)) {
+            if let Some(position) = view.iter().position(|&x| x == id) {
+                self.thumbs.request(id, self.session.borrow().image(id).path.clone(), position, false);
+            }
+        }
+    }
+
     /// Copy paths to the clipboard: the marked images, or everything shown.
     fn yank(self: &Rc<Self>, everything: bool) {
         let session = self.session.borrow();
@@ -870,6 +893,9 @@ impl App {
             (Key::r, _) if ctrl && !alt => self.undo(true),
             _ if ctrl || alt => return glib::Propagation::Proceed,
             (Key::colon, _) => self.palette.open_commands(),
+            (Key::exclam, _) => {
+                glib::spawn_future_local(commands::run_shell(self.clone()));
+            }
             (Key::question, _) => self.palette.open_help(),
             (Key::q, _) => self.window.close(),
             (Key::s, _) => self.toggle_sort(),

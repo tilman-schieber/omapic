@@ -242,6 +242,15 @@ impl Preview {
         });
     }
 
+    /// The file behind `id` changed: drop what was decoded from it.
+    pub fn forget(&self, id: ImageId) {
+        self.cache.borrow_mut().retain(|f| f.id != id);
+        if self.target.get() == Some(id) {
+            self.target.set(None);
+            self.original.take();
+        }
+    }
+
     pub fn clear(&self) {
         self.target.set(None);
         self.generation.set(self.generation.get() + 1);

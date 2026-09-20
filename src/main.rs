@@ -1,8 +1,10 @@
 mod cli;
 mod fsops;
+mod history;
 mod model;
 mod montage;
 mod quick;
+mod shell;
 mod theme;
 mod thumbs;
 mod ui;

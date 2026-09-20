@@ -6,8 +6,6 @@ or it is one more explicit action on a bin.
 
 ## Actions
 
-- **Run a shell command on the workspace** — `:!` with `{}` substitution
-  (`mogrify -resize 50% {}`), confirmed like every other file operation.
 
 ## Polish
 
@@ -26,7 +24,8 @@ or it is one more explicit action on a bin.
 
 ## Deliberately out
 
-- Persistence of any kind, including optional session files. If bins must
+- Persistence of anything about images, including optional session files
+  (the shell command history is the one stored thing). If bins must
   survive, yank / `--print` hands them to the shell.
 - Editing, EXIF writing beyond the orientation value, ratings, recursive library scanning,
   config files, plugins, multiple windows or tabs.

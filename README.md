@@ -93,6 +93,7 @@ All commands act on the images **currently shown**, in the order shown.
 | Symlink / Hard-link workspace into folder… | a selection folder without duplicating the data |
 | Rename files in workspace according to current order… | in place: `001_name.jpg`, `002_…` |
 | Create contact sheet… | output file, columns, thumbnail size, labels on/off → `magick montage` |
+| Run shell command on workspace… (`!`) | anything, per file or over all files — see below |
 | Move workspace to trash… | the desktop trash, so it is recoverable — e.g. bin 9 for rejects |
 | Save rotations to files… | writes pending `r`/`R` rotations of the shown JPEGs |
 | Open containing folder | of the selected image |
@@ -101,6 +102,29 @@ All commands act on the images **currently shown**, in the order shown.
 When a manually sorted view is moved or copied, omapic offers to persist the
 order as numeric prefixes. The width fits the image count (at least three
 digits), and an existing `NNN_` prefix is replaced rather than stacked.
+
+### Shell commands
+
+`!` (or the palette) runs a shell command over the images shown, in display
+order. Placeholders, already quoted for the shell:
+
+| | |
+|---|---|
+| `{}` | the file — the command runs once per file, in the file's folder |
+| `{.}` `{/}` `{/.}` `{//}` | path without extension · file name · name without extension · folder |
+| `{+}` | all files at once — the command runs a single time, in the first file's folder |
+
+    magick {} -resize '1600x1600>' {.}_web.jpg
+    magick {+} images.pdf
+
+Under the prompt omapic offers your earlier commands and a set of common
+ImageMagick lines; type to narrow them down, pick one with the arrows and
+`Enter` to get it into the prompt for editing, `Enter` again to go on. The
+expanded commands are shown before anything runs. Afterwards thumbnails are
+refreshed, and images whose files are gone leave the session.
+
+The history (`~/.local/state/omapic/shell-history`) is the only thing omapic
+ever stores, and it holds commands, not anything about your images.
 
 ### Rotation
 
@@ -123,8 +147,9 @@ rotations before making a contact sheet.
 - In-place renames whose targets overlap their sources go through temporary
   names, and are rolled back if parking fails.
 - Every operation needs an explicit `y`.
-- The only command that changes file contents is *Save rotations*, and it
-  changes nothing but the orientation value.
+- omapic itself changes file contents only in *Save rotations* (the
+  orientation value, nothing else). What a shell command does is up to you;
+  you see exactly what will run before it does.
 - There is no delete; the closest thing is the (recoverable) trash.
 
 ## Theming
@@ -146,6 +171,8 @@ the window class is `org.omapic.Omapic`.
     src/cli.rs       arguments → image list, natural sort
     src/fsops.rs     the only code that modifies files: plan → check → execute; EXIF rotation
     src/montage.rs   `magick montage` invocation
+    src/shell.rs     shell command templates: placeholders, suggestions, running
+    src/history.rs   shell command history file
     src/thumbs.rs    off-thread decoding, thumbnail worker pool
     src/quick.rs     ready-made thumbnails: XDG cache lookup, EXIF previews; EXIF orientation
     src/theme.rs     Omarchy colors.toml → GTK CSS, live reload
