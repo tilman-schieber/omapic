@@ -58,7 +58,8 @@ const HELP: &str = "\
 pub struct App {
     window: gtk::ApplicationWindow,
     session: RefCell<Session>,
-    items: Vec<ImageItem>,
+    /// One per image, indexed by `ImageId`; grows when files join the session.
+    items: RefCell<Vec<ImageItem>>,
     store: gio::ListStore,
     selection: gtk::MultiSelection,
     grid: gtk::GridView,
@@ -78,6 +79,8 @@ pub struct App {
     view: RefCell<Vec<ImageId>>,
     hovered: Cell<Option<ImageId>>,
     show_names: Cell<bool>,
+    /// What `y` put on the clipboard, to hand over when quitting.
+    yanked: RefCell<Option<String>>,
     sort_key: Cell<SortKey>,
     /// After binning an image, move on to the next one.
     advance: Cell<bool>,
@@ -184,7 +187,7 @@ pub fn build(application: &gtk::Application, input: Input, print: Option<char>) 
     let app = Rc::new(App {
         window,
         session: RefCell::new(session),
-        items,
+        items: RefCell::new(items),
         store,
         selection,
         grid,
@@ -202,6 +205,7 @@ pub fn build(application: &gtk::Application, input: Input, print: Option<char>) 
         view: RefCell::default(),
         hovered: Cell::new(None),
         show_names: Cell::new(false),
+        yanked: RefCell::default(),
         sort_key: Cell::new(SortKey::Input),
         advance: Cell::new(false),
         cells: RefCell::default(),
@@ -228,22 +232,23 @@ pub fn build(application: &gtk::Application, input: Input, print: Option<char>) 
         }
     });
 
-    if app.items.is_empty() {
+    if app.items.borrow().is_empty() {
         app.say("no images found", true);
     }
-    if let Some(terminator) = print {
-        let weak = Rc::downgrade(&app);
-        app.window.connect_close_request(move |_| {
-            if let Some(app) = weak.upgrade() {
+    let weak = Rc::downgrade(&app);
+    app.window.connect_close_request(move |_| {
+        if let Some(app) = weak.upgrade() {
+            app.keep_clipboard();
+            if let Some(terminator) = print {
                 use std::io::Write;
                 let mut out = std::io::stdout().lock();
                 for (_, path) in app.visible_files() {
                     let _ = write!(out, "{}{terminator}", path.display());
                 }
             }
-            glib::Propagation::Proceed
-        });
-    }
+        }
+        glib::Propagation::Proceed
+    });
     app.window.present();
     app.grid.grab_focus();
     // Once the grid has a size, bring the initially selected image into view.
@@ -380,7 +385,7 @@ impl App {
                 .count();
             let removed = have.len() - prefix - suffix;
             let added: Vec<ImageItem> =
-                want[prefix..want.len() - suffix].iter().map(|&id| self.items[id].clone()).collect();
+                want[prefix..want.len() - suffix].iter().map(|&id| self.item(id).clone()).collect();
             if removed > 0 || !added.is_empty() {
                 self.syncing.set(true);
                 self.store.splice(prefix as u32, removed as u32, &added);
@@ -388,7 +393,7 @@ impl App {
             }
             *have = want;
         }
-        for (item, entry) in self.items.iter().zip(self.session.borrow().images()) {
+        for (item, entry) in self.items.borrow().iter().zip(self.session.borrow().images()) {
             let ws = entry.workspace.map_or(0, u32::from);
             if item.workspace() != ws {
                 item.set_workspace(ws);
@@ -419,6 +424,10 @@ impl App {
         self.scroll_to_selected();
         self.update_preview();
         self.update_status();
+    }
+
+    fn item(&self, id: ImageId) -> ImageItem {
+        self.items.borrow()[id].clone()
     }
 
     fn selected_position(&self) -> Option<usize> {
@@ -456,8 +465,8 @@ impl App {
                         neighbours.extend(around.iter().flatten().filter_map(|&p| view.get(p)).map(|&n| shot(n)));
                     }
                 }
-                self.preview.show(shot(id), self.items[id].texture(), neighbours);
-                if self.items[id].texture().is_none() && !self.items[id].failed() {
+                self.preview.show(shot(id), self.item(id).texture(), neighbours);
+                if self.item(id).texture().is_none() && !self.item(id).failed() {
                     let position = self.view.borrow().iter().position(|&x| x == id).unwrap_or(0);
                     self.thumbs.request(id, session.image(id).path.clone(), position, false);
                 }
@@ -610,7 +619,7 @@ impl App {
     }
 
     fn thumbnail_ready(&self, Thumbnail { id, texture, sharp }: Thumbnail) {
-        let item = &self.items[id];
+        let item = &self.item(id);
         let Some(texture) = texture else {
             item.set_failed(true);
             return;
@@ -633,8 +642,8 @@ impl App {
             if self.bound.borrow().contains(&old) {
                 spared.push(old);
             } else {
-                self.items[old].set_texture(gdk::Texture::NONE);
-                self.items[old].set_sharp(false);
+                self.item(old).set_texture(gdk::Texture::NONE);
+                self.item(old).set_sharp(false);
             }
         }
         order.extend(spared);
@@ -735,7 +744,7 @@ impl App {
     fn rotations_saved(self: &Rc<Self>, ids: &[ImageId]) {
         for &id in ids {
             self.session.borrow_mut().rotation_saved(id);
-            self.items[id].set_turns(0);
+            self.item(id).set_turns(0);
         }
         self.sync();
     }
@@ -747,7 +756,7 @@ impl App {
         self.session.borrow_mut().remove(&vanished);
         self.thumb_order.borrow_mut().retain(|id| !ids.contains(id));
         for &id in ids {
-            let item = &self.items[id];
+            let item = &self.item(id);
             item.set_texture(gdk::Texture::NONE);
             item.set_sharp(false);
             item.set_failed(false);
@@ -762,6 +771,36 @@ impl App {
         }
     }
 
+    /// On Wayland a clipboard dies with its owner. If ours still holds the
+    /// yanked paths when quitting, `wl-copy` takes over (it stays behind as a
+    /// tiny background process until something else is copied).
+    fn keep_clipboard(&self) {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+        let Some(text) = self.yanked.take().filter(|_| self.window.clipboard().is_local()) else { return };
+        let child = Command::new("wl-copy").stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
+        if let Ok(mut child) = child {
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.write_all(text.as_bytes());
+            }
+            let _ = child.wait(); // returns at once: wl-copy forks to serve the clipboard
+        }
+    }
+
+    /// Image files that appeared in the session's folders (made by a shell
+    /// command) join the session, unbinned, at the end.
+    pub(super) fn add_images(self: &Rc<Self>, paths: Vec<std::path::PathBuf>) -> usize {
+        let known: HashSet<std::path::PathBuf> =
+            self.session.borrow().images().iter().filter(|e| !e.removed).map(|e| e.path.clone()).collect();
+        let new: Vec<_> = paths.into_iter().filter(|p| !known.contains(p)).collect();
+        let ids = self.session.borrow_mut().add(new);
+        self.items.borrow_mut().extend(ids.iter().map(|&id| ImageItem::new(id)));
+        if !ids.is_empty() && self.sort_key.get() != SortKey::Input {
+            self.apply_sort_key(); // slot them in where the current order wants them
+        }
+        ids.len()
+    }
+
     /// Copy paths to the clipboard: the marked images, or everything shown.
     fn yank(self: &Rc<Self>, everything: bool) {
         let session = self.session.borrow();
@@ -771,7 +810,9 @@ impl App {
         if paths.is_empty() {
             return;
         }
-        self.window.clipboard().set_text(&paths.join("\n"));
+        let text = paths.join("\n");
+        self.window.clipboard().set_text(&text);
+        self.yanked.replace(Some(text));
         let what = if paths.len() == 1 { "path".to_string() } else { format!("{} paths", paths.len()) };
         self.say(&format!("{what} copied to the clipboard"), false);
     }
@@ -818,8 +859,13 @@ impl App {
 
     /// `o`: what unsorted views are ordered by. Reads files, so off-thread.
     fn cycle_sort_key(self: &Rc<Self>) {
-        let key = self.sort_key.get().next();
-        self.sort_key.set(key);
+        self.sort_key.set(self.sort_key.get().next());
+        self.apply_sort_key();
+    }
+
+    /// (Re-)establish the natural order for the current sort key.
+    fn apply_sort_key(self: &Rc<Self>) {
+        let key = self.sort_key.get();
         let paths: Vec<std::path::PathBuf> = self.session.borrow().images().iter().map(|e| e.path.clone()).collect();
         let app = self.clone();
         glib::spawn_future_local(async move {
@@ -894,11 +940,11 @@ impl App {
             // stand-in and fetch sharper versions of what is on screen.
             self.decoded_for.set(size);
             self.thumbs.set_size(size * self.scale);
-            self.items.iter().for_each(|item| item.set_sharp(false));
+            self.items.borrow().iter().for_each(|item| item.set_sharp(false));
             let (session, view) = (self.session.borrow(), self.view.borrow());
             for &id in self.bound.borrow().iter() {
                 if let Some(position) = view.iter().position(|&x| x == id) {
-                    let standin = self.items[id].texture().is_some();
+                    let standin = self.item(id).texture().is_some();
                     self.thumbs.request(id, session.image(id).path.clone(), position, standin);
                 }
             }

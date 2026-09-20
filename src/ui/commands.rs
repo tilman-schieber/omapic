@@ -267,18 +267,34 @@ async fn shell(app: &Rc<App>) -> Outcome {
 
     app.say("running…", false);
     let total = jobs.len();
-    let failures = gio::spawn_blocking(move || {
-        jobs.iter().filter_map(|job| shell::run(job).err()).collect::<Vec<String>>()
+    // Images the command creates (`{.}_web.jpg`, `strip.jpg`…) should show up:
+    // compare the folders involved before and after.
+    let mut folders: Vec<PathBuf> = jobs.iter().map(|job| job.cwd.clone()).collect();
+    folders.extend(paths.iter().filter_map(|p| p.parent().map(PathBuf::from)));
+    folders.sort();
+    folders.dedup();
+    let (failures, created) = gio::spawn_blocking(move || {
+        let listing = || folders.iter().flat_map(|dir| crate::cli::scan_dir(dir)).collect::<Vec<PathBuf>>();
+        let before: std::collections::HashSet<PathBuf> = listing().into_iter().collect();
+        let failures = jobs.iter().filter_map(|job| shell::run(job).err()).collect::<Vec<String>>();
+        let created: Vec<PathBuf> = listing().into_iter().filter(|p| !before.contains(p)).collect();
+        (failures, created)
     })
     .await
     .map_err(|_| "shell command crashed".to_string())?;
 
+    let added = app.add_images(created);
     let ids: Vec<usize> = files.iter().map(|(id, _)| *id).collect();
     app.files_changed(&ids);
+    let new = match added {
+        0 => String::new(),
+        1 => " · 1 new image joined".into(),
+        n => format!(" · {n} new images joined"),
+    };
     match failures.first() {
-        Some(first) => Err(format!("{} of {total} failed: {first}", failures.len())),
-        None if total == 1 => Ok(Some("command finished".into())),
-        None => Ok(Some(format!("{total} commands finished"))),
+        Some(first) => Err(format!("{} of {total} failed: {first}{new}", failures.len())),
+        None if total == 1 => Ok(Some(format!("command finished{new}"))),
+        None => Ok(Some(format!("{total} commands finished{new}"))),
     }
 }
 

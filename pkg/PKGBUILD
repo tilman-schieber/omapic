@@ -8,7 +8,8 @@ url="https://github.com/tilman-schieber/omapic"
 license=('MIT')
 depends=('gtk4' 'gdk-pixbuf2' 'glib2' 'libjpeg-turbo' 'hicolor-icon-theme')
 makedepends=('cargo' 'git')
-optdepends=('imagemagick: contact sheets and the suggested shell commands')
+optdepends=('imagemagick: contact sheets and the suggested shell commands'
+            'wl-clipboard: keep yanked paths on the clipboard after quitting')
 provides=('omapic')
 conflicts=('omapic')
 source=("omapic::git+$url.git")

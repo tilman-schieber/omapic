@@ -18,7 +18,7 @@ confirm it.
 
 ## Install
 
-    sudo pacman -S --needed rust gtk4 libjpeg-turbo imagemagick
+    sudo pacman -S --needed rust gtk4 libjpeg-turbo imagemagick wl-clipboard
     git clone https://github.com/tilman-schieber/omapic
     cd omapic
     cargo install --path .        # → ~/.cargo/bin/omapic
@@ -75,7 +75,7 @@ always hints at the keys that matter in the current context; `?` shows all.
 | `Shift+←` `Shift+→`, `H` `L` | move the image backward / forward |
 | drag a thumbnail | reorder |
 | `u` / `U`, `Ctrl+R` | undo / redo binning, ordering, rotating and sort toggles (never file operations) |
-| `y` / `Y` | copy the path of the selected image(s) / of everything shown to the clipboard (paste while omapic is open, unless a clipboard manager keeps it) |
+| `y` / `Y` | copy the path of the selected image(s) / of everything shown to the clipboard (kept after quitting via `wl-copy`, if installed) |
 | `+` / `-` | larger / smaller thumbnails |
 | `f` | file names under thumbnails |
 | `i` | file and camera info (size, dates, camera, exposure) under the preview |
@@ -135,7 +135,9 @@ Under the prompt omapic offers your earlier commands and a set of common
 ImageMagick lines; type to narrow them down, pick one with the arrows and
 `Enter` to get it into the prompt for editing, `Enter` again to go on. The
 expanded commands are shown before anything runs. Afterwards thumbnails are
-refreshed, and images whose files are gone leave the session.
+refreshed, images whose files are gone leave the session, and image files
+the command created in those folders (`{.}_web.jpg`, `strip.jpg`, …) join it,
+unbinned.
 
 The history (`~/.local/state/omapic/shell-history`) is the only thing omapic
 ever stores, and it holds commands, not anything about your images.

@@ -8,9 +8,6 @@ Everything that was here is built. New ideas go below.
 
 ## Ideas
 
-- Keep the clipboard alive after quitting (`y` currently needs omapic open
-  or a clipboard manager).
-- Pick up files a shell command created (e.g. `{.}_web.jpg`) without restarting.
 - Publish `pkg/PKGBUILD` to the AUR.
 
 ## Deliberately out

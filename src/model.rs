@@ -243,7 +243,10 @@ impl Session {
         let Some(entry) = self.images.get_mut(id) else { return };
         let saved = std::mem::take(&mut entry.rotation);
         for snapshot in self.undo.iter_mut().chain(self.redo.iter_mut()) {
-            snapshot.rotations[id] = (snapshot.rotations[id] + 4 - saved) % 4;
+            // Snapshots from before the image joined the session don't know it.
+            if let Some(rotation) = snapshot.rotations.get_mut(id) {
+                *rotation = (*rotation + 4 - saved) % 4;
+            }
         }
     }
 
@@ -388,6 +391,16 @@ impl Session {
         to != pos && self.move_to(id, to)
     }
 
+    /// New files join the session: unbinned, at the end of the natural order.
+    pub fn add(&mut self, paths: Vec<PathBuf>) -> Vec<ImageId> {
+        let first = self.images.len();
+        for path in paths {
+            self.natural.push(self.images.len());
+            self.images.push(ImageEntry { path, workspace: None, rotation: 0, removed: false });
+        }
+        (first..self.images.len()).collect()
+    }
+
     /// The files behind `ids` no longer exist. Not an undo step: undo never
     /// brings files back, and a removed image stays hidden in every state.
     pub fn remove(&mut self, ids: &[ImageId]) {
@@ -513,6 +526,26 @@ mod tests {
         s.set_active(2);
         s.assign_marked(None); // and back onto the pile
         assert_eq!(s.unbinned_count(), 3);
+    }
+
+    #[test]
+    fn images_can_join_later() {
+        let mut s = session(2);
+        s.assign(0, Some(1));
+        s.rotate(&[1], 1);
+        let ids = s.add(vec![PathBuf::from("/p/new.jpg")]);
+        assert_eq!(ids, vec![2]);
+        assert_eq!(s.visible(), vec![0, 1, 2]);
+        assert_eq!(s.unbinned_count(), 2);
+        s.assign(2, Some(1));
+        s.rotate(&[2], 1);
+        s.rotation_saved(2); // older snapshots have no slot for image 2
+        while s.undo() {} // through states from before it existed, too
+        // Unbinned again; its saved quarter turn is undone by three more, pending.
+        assert_eq!((s.image(2).workspace, s.image(2).rotation), (None, 3));
+        assert_eq!(s.visible().len(), 3); // undo never makes an image disappear
+        s.set_natural_order(vec![2, 1, 0]);
+        assert_eq!(s.visible(), vec![2, 1, 0]);
     }
 
     #[test]
