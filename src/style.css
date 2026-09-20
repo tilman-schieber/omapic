@@ -1,0 +1,108 @@
+/* Colours (@om_*) are defined in front of this sheet from the Omarchy theme. */
+
+window {
+  background: @om_background;
+  color: @om_foreground;
+  font-family: monospace;
+  font-size: 10pt;
+}
+
+scrolledwindow, gridview, paned, .preview { background: transparent; }
+
+scrollbar { background: transparent; border: none; }
+scrollbar slider {
+  min-width: 4px;
+  border-radius: 0;
+  background: @om_lighter_background;
+}
+scrollbar slider:hover { background: @om_muted; }
+
+paned > separator {
+  min-width: 1px;
+  background-color: @om_lighter_background;
+  background-image: none;
+  background-clip: content-box;
+}
+
+/* ── grid ─────────────────────────────────────────────── */
+
+gridview.grid { padding: 6px; }
+
+gridview.grid > child {
+  padding: 5px;
+  margin: 2px;
+  border: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  outline: none;
+}
+gridview.grid > child:hover { background: @om_selection; }
+gridview.grid > child:selected {
+  border-color: @om_accent;
+  background: @om_selection;
+}
+gridview.grid > child:drop(active) {
+  box-shadow: none;
+  border-color: transparent;
+  border-left-color: @om_foreground;
+}
+
+.badge {
+  margin: 2px;
+  padding: 0 6px;
+  min-width: 8px;
+  font-weight: bold;
+  color: @om_background;
+  background: @om_accent;
+}
+
+.broken { color: @om_muted; font-size: 8pt; }
+
+/* ── preview ──────────────────────────────────────────── */
+
+.preview { padding: 12px 12px 6px 12px; }
+.preview.zoomed { padding: 0; background: @om_dark_background; }
+.preview .caption { padding-top: 8px; color: @om_muted; }
+.preview.zoomed .caption { padding: 6px; }
+
+/* ── status line ──────────────────────────────────────── */
+
+.status {
+  padding: 4px 10px;
+  background: @om_dark_background;
+  color: @om_muted;
+}
+.status .ws { padding: 0 6px; }
+.status .ws.active { color: @om_background; background: @om_accent; font-weight: bold; }
+.status .info.manual { color: @om_foreground; }
+.status .message { color: @om_foreground; }
+.status .message.error { color: @om_red; }
+.status .message.hints { color: @om_muted; font-size: 9pt; }
+
+/* ── palette ──────────────────────────────────────────── */
+
+.palette {
+  padding: 10px;
+  background: @om_dark_background;
+  border: 2px solid @om_accent;
+  border-radius: 0;
+  outline: none;
+}
+.palette-title { padding: 2px 6px 8px 6px; color: @om_muted; }
+.palette-entry {
+  padding: 6px;
+  min-height: 0;
+  border-radius: 0;
+  border: none;
+  outline: none;
+  box-shadow: none;
+  background: @om_lighter_background;
+  color: @om_foreground;
+  caret-color: @om_accent;
+}
+.palette-entry selection { background: @om_accent; color: @om_background; }
+.palette-list { margin-top: 8px; background: transparent; }
+.palette-list row { padding: 5px 6px; border-radius: 0; color: @om_foreground; outline: none; }
+.palette-list row:selected { background: @om_selection; color: @om_accent; }
+.palette-help { padding: 2px 6px; color: @om_foreground; }
+.palette-hint { padding: 8px 6px 0 6px; color: @om_muted; font-size: 8pt; }
