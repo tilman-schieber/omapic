@@ -92,6 +92,7 @@ gridview.grid > child:selected .name { color: @om_foreground; }
   outline: none;
 }
 .palette-title { padding: 2px 6px 8px 6px; color: @om_muted; }
+.palette-detail { padding: 0 6px 8px 6px; color: @om_foreground; font-size: 9pt; }
 .palette-entry {
   padding: 6px;
   min-height: 0;

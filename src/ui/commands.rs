@@ -7,38 +7,50 @@ use std::rc::Rc;
 use gtk::gio;
 
 use super::App;
+use crate::cli::file_name;
 use crate::fsops::{self, Op};
 use crate::montage::{self, ContactSheet};
 use crate::theme::Theme;
 
-const COMMANDS: &[&str] = &[
-    "Move workspace to folder…",
-    "Copy workspace to folder…",
-    "Rename files in workspace according to current order…",
-    "Create contact sheet…",
-    "Save rotations to files…",
-    "Open containing folder",
-    "Remove selected image from workspace",
-    "Keyboard shortcuts",
+#[derive(Clone, Copy)]
+enum Command {
+    Transfer(Op),
+    Rename,
+    ContactSheet,
+    SaveRotations,
+    OpenFolder,
+    Unbin,
+    Help,
+}
+
+const COMMANDS: &[(&str, Command)] = &[
+    ("Move workspace to folder…", Command::Transfer(Op::Move)),
+    ("Copy workspace to folder…", Command::Transfer(Op::Copy)),
+    ("Rename files in workspace according to current order…", Command::Rename),
+    ("Create contact sheet…", Command::ContactSheet),
+    ("Save rotations to files…", Command::SaveRotations),
+    ("Open containing folder", Command::OpenFolder),
+    ("Remove selected image from workspace", Command::Unbin),
+    ("Keyboard shortcuts", Command::Help),
 ];
 
 pub fn titles() -> Vec<&'static str> {
-    COMMANDS.to_vec()
+    COMMANDS.iter().map(|(title, _)| *title).collect()
 }
 
 pub async fn run(app: Rc<App>, index: usize) {
-    let result = match index {
-        0 => transfer(&app, Op::Move).await,
-        1 => transfer(&app, Op::Copy).await,
-        2 => rename(&app).await,
-        3 => contact_sheet(&app).await,
-        4 => save_rotations(&app).await,
-        5 => open_folder(&app),
-        6 => {
+    let Some(&(_, command)) = COMMANDS.get(index) else { return };
+    let result = match command {
+        Command::Transfer(op) => transfer(&app, op).await,
+        Command::Rename => rename(&app).await,
+        Command::ContactSheet => contact_sheet(&app).await,
+        Command::SaveRotations => save_rotations(&app).await,
+        Command::OpenFolder => open_folder(&app),
+        Command::Unbin => {
             app.assign(None);
             Ok(None)
         }
-        _ => {
+        Command::Help => {
             app.palette.open_help();
             Ok(None)
         }
@@ -48,6 +60,21 @@ pub async fn run(app: Rc<App>, index: usize) {
         Ok(None) => {}
         Err(problem) => app.say(&problem, true),
     }
+}
+
+/// The first lines of a plan, for the confirmation prompt.
+fn preview(plan: &fsops::Plan) -> String {
+    const SHOWN: usize = 5;
+    let mut lines: Vec<String> = plan
+        .steps
+        .iter()
+        .take(SHOWN)
+        .map(|step| format!("{}  →  {}", file_name(&step.src), file_name(&step.dst)))
+        .collect();
+    if plan.steps.len() > SHOWN {
+        lines.push(format!("… and {} more", plan.steps.len() - SHOWN));
+    }
+    lines.join("\n")
 }
 
 /// `Ok(None)` = cancelled or nothing to report.
@@ -87,7 +114,7 @@ async fn transfer(app: &Rc<App>, op: Op) -> Outcome {
     let plan = fsops::plan(op, &paths, &dest, prefix)?;
     let created = if dest.is_dir() { "" } else { " (will be created)" };
     let question = format!("{verb} {} files to {}{created}?", paths.len(), dest.display());
-    if app.palette.ask_yes_no(&question, false).await != Some(true) {
+    if app.palette.confirm(&question, &preview(&plan), false).await != Some(true) {
         return Ok(None);
     }
     finish(app, plan, &files, done).await
@@ -107,7 +134,7 @@ async fn rename(app: &Rc<App>) -> Outcome {
         paths.len(),
         app.view_name()
     );
-    if app.palette.ask_yes_no(&question, false).await != Some(true) {
+    if app.palette.confirm(&question, &preview(&plan), false).await != Some(true) {
         return Ok(None);
     }
     finish(app, plan, &files, "renamed").await

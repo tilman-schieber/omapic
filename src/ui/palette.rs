@@ -23,6 +23,8 @@ pub struct Palette {
     entry: gtk::Entry,
     list: gtk::ListBox,
     help: gtk::Label,
+    /// What a confirmation is about to do, e.g. the first lines of a plan.
+    detail: gtk::Label,
     hint: gtk::Label,
     mode: Cell<Mode>,
     commands: Vec<&'static str>,
@@ -54,7 +56,14 @@ impl Palette {
         let help = gtk::Label::builder().xalign(0.0).use_markup(true).css_classes(["palette-help"]).build();
         help.set_markup(help_markup);
         let hint = gtk::Label::builder().xalign(0.0).css_classes(["palette-hint"]).build();
-        for w in [title.upcast_ref::<gtk::Widget>(), entry.upcast_ref(), list.upcast_ref(), help.upcast_ref(), hint.upcast_ref()] {
+        let detail = gtk::Label::builder()
+            .xalign(0.0)
+            .ellipsize(gtk::pango::EllipsizeMode::Middle)
+            .css_classes(["palette-detail"])
+            .build();
+        let parts: [&gtk::Widget; 6] =
+            [title.upcast_ref(), detail.upcast_ref(), entry.upcast_ref(), list.upcast_ref(), help.upcast_ref(), hint.upcast_ref()];
+        for w in parts {
             root.append(w);
         }
 
@@ -64,6 +73,7 @@ impl Palette {
             entry,
             list,
             help,
+            detail,
             hint,
             mode: Cell::new(Mode::Closed),
             commands,
@@ -128,16 +138,28 @@ impl Palette {
 
     /// Ask for a line of text. Resolves to `None` when cancelled.
     pub async fn ask(&self, title: &str, initial: &str, complete_dirs: bool) -> Option<String> {
+        self.ask_about(title, "", initial, complete_dirs).await
+    }
+
+    /// Like `ask`, with `detail` lines under the title.
+    pub async fn ask_about(&self, title: &str, detail: &str, initial: &str, complete_dirs: bool) -> Option<String> {
         let (tx, rx) = async_channel::bounded(1);
         self.reply.replace(Some(tx)); // dropping an older sender cancels that prompt
         self.show(Mode::Prompt { complete_dirs }, title, initial);
+        self.detail.set_label(detail);
+        self.detail.set_visible(!detail.is_empty());
         rx.recv().await.ok().flatten()
     }
 
     /// Yes/no question; an empty answer means `default`.
     pub async fn ask_yes_no(&self, question: &str, default: bool) -> Option<bool> {
+        self.confirm(question, "", default).await
+    }
+
+    /// Yes/no with `detail` lines spelling out what would happen.
+    pub async fn confirm(&self, question: &str, detail: &str, default: bool) -> Option<bool> {
         let choices = if default { "[Y/n]" } else { "[y/N]" };
-        let answer = self.ask(&format!("{question} {choices}"), "", false).await?;
+        let answer = self.ask_about(&format!("{question} {choices}"), detail, "", false).await?;
         Some(match answer.trim().to_lowercase().as_str() {
             "" => default,
             "y" | "yes" | "j" | "ja" => true,
@@ -152,6 +174,7 @@ impl Palette {
         self.entry.set_visible(mode != Mode::Help);
         self.list.set_visible(mode == Mode::Commands);
         self.help.set_visible(mode == Mode::Help);
+        self.detail.set_visible(false);
         self.hint.set_label(match mode {
             Mode::Prompt { complete_dirs: true } => "enter accept · tab complete · esc cancel",
             Mode::Prompt { .. } => "enter accept · esc cancel",

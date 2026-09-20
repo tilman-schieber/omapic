@@ -14,8 +14,6 @@ or it is one more explicit action on a bin.
 - **Move workspace to trash** — via `gio trash`; recoverable, so it fits the
   safety rules. Enables "bin 9 = rejects → trash".
 - **Symlink / hardlink workspace into folder** — copy without duplicating data.
-- **Dry-run preview** — show the first few `src → dst` lines of the plan in
-  the palette before the `y/N`.
 
 ## Polish
 
