@@ -38,6 +38,8 @@ struct Full {
     turns: u8,
     texture: gdk::Texture,
     dimensions: (i32, i32),
+    /// File and camera facts for the info line.
+    info: String,
 }
 
 pub struct Preview {
@@ -45,6 +47,7 @@ pub struct Preview {
     scroller: gtk::ScrolledWindow,
     picture: gtk::Picture,
     caption: gtk::Label,
+    info: gtk::Label,
     target: Cell<Option<ImageId>>,
     target_path: RefCell<PathBuf>,
     target_turns: Cell<u8>,
@@ -79,13 +82,21 @@ impl Preview {
             .css_classes(["caption"])
             .build();
         let scroller = gtk::ScrolledWindow::builder().child(&picture).vexpand(true).hexpand(true).build();
+        let info = gtk::Label::builder()
+            .wrap(true)
+            .justify(gtk::Justification::Center)
+            .visible(false)
+            .css_classes(["info"])
+            .build();
         root.append(&scroller);
         root.append(&caption);
+        root.append(&info);
         let preview = Rc::new(Preview {
             root,
             scroller,
             picture,
             caption,
+            info,
             target: Cell::new(None),
             target_path: RefCell::default(),
             target_turns: Cell::new(0),
@@ -154,6 +165,11 @@ impl Preview {
                 }
             });
         }
+    }
+
+    /// `i`: a second caption line with file and camera facts.
+    pub fn toggle_info(&self) {
+        self.info.set_visible(!self.info.is_visible());
     }
 
     pub fn is_actual_size(&self) -> bool {
@@ -256,6 +272,7 @@ impl Preview {
         self.generation.set(self.generation.get() + 1);
         self.picture.set_paintable(gdk::Paintable::NONE);
         self.caption.set_label("");
+        self.info.set_label("");
         self.layout();
     }
 
@@ -293,6 +310,7 @@ impl Preview {
         self.has_full.set(false);
         self.picture.set_paintable(placeholder.as_ref());
         self.caption_for(&shot.path, None);
+        self.info.set_label("");
         self.layout();
 
         let this = Rc::downgrade(self);
@@ -314,6 +332,7 @@ impl Preview {
             self.has_full.set(true);
             self.picture.set_paintable(Some(&full.texture));
             self.caption_for(&shot.path, Some(full.dimensions));
+            self.info.set_label(&full.info);
             cache.push_back(full);
         }
         self.layout();
@@ -335,18 +354,18 @@ impl Preview {
             let job = shot.clone();
             let loaded = gio::spawn_blocking(move || {
                 let dimensions = Pixbuf::file_info(&job.path).map(|(_, w, h)| (w, h));
-                (thumbs::decode(&job.path, MAX_EDGE, job.turns), dimensions)
+                (thumbs::decode(&job.path, MAX_EDGE, job.turns), dimensions, facts(&job.path))
             })
             .await;
             this.loading.borrow_mut().remove(&shot.id);
-            if let Ok((Some(texture), dimensions)) = loaded {
+            if let Ok((Some(texture), dimensions, (sideways, info))) = loaded {
                 let (w, h) = dimensions.unwrap_or((texture.width(), texture.height()));
-                // File dimensions, as the pending rotation will leave them.
-                let dimensions = if shot.turns % 2 == 1 { (h, w) } else { (w, h) };
+                // Dimensions as shown: EXIF orientation and pending rotation applied.
+                let dimensions = if sideways != (shot.turns % 2 == 1) { (h, w) } else { (w, h) };
                 {
                     let mut cache = this.cache.borrow_mut();
                     cache.retain(|f| f.id != shot.id);
-                    cache.push_back(Full { id: shot.id, turns: shot.turns, texture, dimensions });
+                    cache.push_back(Full { id: shot.id, turns: shot.turns, texture, dimensions, info });
                     while cache.len() > CACHED {
                         cache.pop_front();
                     }
@@ -374,4 +393,26 @@ impl Preview {
         }
         self.caption.set_label(&text);
     }
+}
+
+/// Blocking: is the image stored sideways (EXIF), and its info line.
+fn facts(path: &std::path::Path) -> (bool, String) {
+    use std::io::Read;
+    let mut facts = Vec::new();
+    if let Ok(meta) = path.metadata() {
+        facts.push(glib::format_size(meta.len()).to_string());
+        let modified = meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok());
+        let modified = modified.and_then(|d| glib::DateTime::from_unix_local(d.as_secs() as i64).ok());
+        if let Some(text) = modified.and_then(|d| d.format("%Y-%m-%d %H:%M").ok()) {
+            facts.push(format!("modified {text}"));
+        }
+    }
+    let mut head = Vec::new();
+    if crate::cli::is_jpeg(path) {
+        let _ = std::fs::File::open(path).map(|f| f.take(128 * 1024).read_to_end(&mut head));
+    }
+    let exif = crate::exif::Exif::find(&head);
+    let sideways = exif.as_ref().and_then(|e| e.orientation()).is_some_and(|(_, _, o)| crate::exif::is_sideways(o));
+    facts.extend(exif.map(|e| e.summary()).unwrap_or_default());
+    (sideways, facts.join("  ·  "))
 }

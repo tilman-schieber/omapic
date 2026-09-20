@@ -47,6 +47,7 @@ const HELP: &str = "\
 <b>u</b>  <b>U</b> / <b>ctrl+r</b>      undo / redo binning, ordering, rotating
 <b>y</b>  <b>Y</b>               copy path of the image(s) / of everything shown
 <b>f</b>                  file names under thumbnails
+<b>i</b>                  file and camera info under the preview
 <b>:</b>  <b>ctrl+k</b>          commands
 <b>!</b>                  run a shell command on the images shown
 <b>?</b>                  this sheet
@@ -911,6 +912,7 @@ impl App {
             (Key::u, _) => self.undo(false),
             (Key::U, _) => self.undo(true),
             (Key::f, _) => self.toggle_names(),
+            (Key::i, _) => self.preview.toggle_info(),
             (Key::Left, _) if shift => self.move_selected(-1),
             (Key::Right, _) if shift => self.move_selected(1),
             (Key::H, _) => self.move_selected(-1),

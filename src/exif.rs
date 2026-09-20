@@ -145,6 +145,35 @@ impl<'a> Exif<'a> {
         Some((self.number(at, 4)?, self.number(at + 4, 4)?)).filter(|(_, d)| *d != 0)
     }
 
+    /// Camera facts for the info line, most telling first.
+    pub fn summary(&self) -> Vec<String> {
+        let mut facts = Vec::new();
+        if let Some(date) = self.text(DATE_TAKEN) {
+            // "2024:05:01 12:30:00" → "taken 2024-05-01 12:30"
+            let (day, time) = date.split_once(' ').unwrap_or((&date, ""));
+            facts.push(format!("taken {} {}", day.replace(':', "-"), time.get(..5).unwrap_or(time)).trim().to_string());
+        }
+        let camera = match (self.text(MAKE), self.text(MODEL)) {
+            (Some(make), Some(model)) if !model.starts_with(&make) => Some(format!("{make} {model}")),
+            (_, Some(model)) => Some(model),
+            (make, None) => make,
+        };
+        facts.extend(camera);
+        if let Some((n, d)) = self.rational(EXPOSURE_TIME).filter(|(n, _)| *n != 0) {
+            facts.push(if n < d { format!("1/{} s", (d as f64 / n as f64).round()) } else { format!("{} s", n as f64 / d as f64) });
+        }
+        if let Some((n, d)) = self.rational(F_NUMBER) {
+            facts.push(format!("f/{}", (n as f64 / d as f64 * 10.0).round() / 10.0));
+        }
+        if let Some(iso) = self.integer(ISO) {
+            facts.push(format!("ISO {iso}"));
+        }
+        if let Some((n, d)) = self.rational(FOCAL_LENGTH) {
+            facts.push(format!("{} mm", (n as f64 / d as f64).round()));
+        }
+        facts
+    }
+
     /// For a block that has no orientation entry: the APP1 segment to put in
     /// place of `old`, recording `orientation`.
     ///
