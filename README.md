@@ -132,10 +132,11 @@ ever stores, and it holds commands, not anything about your images.
 omapic: on screen, in memory, undoable. The status line counts unsaved
 rotations. *Save rotations to files…* makes them permanent, losslessly: only
 the JPEG's EXIF orientation value is changed (two bytes, in place); a JPEG
-without EXIF data gets a minimal EXIF block. Image data is never re-encoded.
-JPEG only; a file whose EXIF block lacks an orientation entry is reported
-and left alone. Other commands work on the files as they are on disk, so save
-rotations before making a contact sheet.
+without EXIF data gets a minimal EXIF block, and EXIF data that never
+recorded an orientation gets the entry added without moving any of the
+existing data. Image data is never re-encoded. JPEG only. Contact sheets
+show pending rotations; move, copy and shell commands work on the files as
+they are on disk.
 
 ### Safety
 
@@ -174,7 +175,8 @@ the window class is `org.omapic.Omapic`.
     src/shell.rs     shell command templates: placeholders, suggestions, running
     src/history.rs   shell command history file
     src/thumbs.rs    off-thread decoding, thumbnail worker pool
-    src/quick.rs     ready-made thumbnails: XDG cache lookup, EXIF previews; EXIF orientation
+    src/quick.rs     ready-made thumbnails: XDG cache lookup, EXIF previews
+    src/exif.rs      minimal EXIF reader; orientation entry writer
     src/theme.rs     Omarchy colors.toml → GTK CSS, live reload
     src/ui/          window, grid cells, preview, palette, commands
 

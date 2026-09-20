@@ -240,7 +240,7 @@ pub fn trash(files: &[PathBuf]) -> Outcome {
 /// Rotate a JPEG losslessly by `quarters` clockwise: only its EXIF
 /// orientation changes, the image data is not touched.
 pub fn save_rotation(path: &Path, quarters: u8) -> Result<(), String> {
-    use crate::quick::{Orientation, exif_orientation, turned};
+    use crate::exif::{Exif, minimal_segment, turned};
     let problem = |e: io::Error| format!("{}: {e}", path.display());
     let mut file = fs::OpenOptions::new().read(true).write(true).open(path).map_err(problem)?;
     let mut head = Vec::new();
@@ -248,36 +248,35 @@ pub fn save_rotation(path: &Path, quarters: u8) -> Result<(), String> {
     if !head.starts_with(&[0xff, 0xd8]) {
         return Err(format!("{}: only JPEG files can be rotated", path.display()));
     }
-    match exif_orientation(&head) {
-        Orientation::Tag { offset, little_endian, value } => {
-            let new = turned(value, quarters);
-            let bytes = if little_endian { new.to_le_bytes() } else { new.to_be_bytes() };
-            file.seek(SeekFrom::Start(offset as u64)).map_err(problem)?;
-            file.write_all(&bytes).map_err(problem)
-        }
-        Orientation::NoTag => Err(format!("{}: EXIF data without orientation entry", path.display())),
-        Orientation::NoExif => insert_exif(path, &mut file, &head, turned(1, quarters)).map_err(problem),
+    let Some(exif) = Exif::find(&head) else {
+        // No EXIF data at all: a minimal block, conventionally after the JFIF header.
+        let jfif = head.get(2..4) == Some(&[0xff, 0xe0]) && head.len() >= 6;
+        let at = if jfif { 4 + u16::from_be_bytes([head[4], head[5]]) as u64 } else { 2 };
+        return splice(path, &mut file, at..at, &minimal_segment(turned(1, quarters))).map_err(problem);
+    };
+    if let Some((offset, little_endian, value)) = exif.orientation() {
+        let new = turned(value, quarters);
+        let bytes = if little_endian { new.to_le_bytes() } else { new.to_be_bytes() };
+        file.seek(SeekFrom::Start(offset as u64)).map_err(problem)?;
+        return file.write_all(&bytes).map_err(problem);
     }
+    // EXIF data that never recorded an orientation: the block grows by a directory.
+    let (old, segment) = exif
+        .with_orientation(turned(1, quarters))
+        .ok_or_else(|| format!("{}: no room for an orientation in its EXIF data", path.display()))?;
+    splice(path, &mut file, old.start as u64..old.end as u64, &segment).map_err(problem)
 }
 
-/// Give a JPEG without EXIF data a minimal block holding the orientation.
-/// The file is rebuilt next to the original and then put in its place.
-fn insert_exif(path: &Path, file: &mut fs::File, head: &[u8], orientation: u16) -> io::Result<()> {
-    let mut segment = vec![0xff, 0xe1, 0, 34];
-    segment.extend(b"Exif\0\0MM\0\x2a\0\0\0\x08\0\x01");
-    segment.extend([0x01, 0x12, 0, 3, 0, 0, 0, 1]);
-    segment.extend(orientation.to_be_bytes());
-    segment.extend([0, 0, 0, 0, 0, 0]);
-    // Conventionally after the JFIF header, if there is one.
-    let jfif = head.get(2..4) == Some(&[0xff, 0xe0]);
-    let at = if jfif { 4 + u16::from_be_bytes([head[4], head[5]]) as u64 } else { 2 };
-
+/// Rebuild `path` with the bytes in `replace` exchanged for `insert`. The new
+/// file is written next to the original and then put in its place.
+fn splice(path: &Path, file: &mut fs::File, replace: std::ops::Range<u64>, insert: &[u8]) -> io::Result<()> {
     let tmp = path.with_file_name(format!(".omapic-{}.tmp", std::process::id()));
     let mut out = fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
     let written = (|| {
         file.seek(SeekFrom::Start(0))?;
-        io::copy(&mut Read::by_ref(file).take(at), &mut out)?;
-        out.write_all(&segment)?;
+        io::copy(&mut Read::by_ref(file).take(replace.start), &mut out)?;
+        out.write_all(insert)?;
+        file.seek(SeekFrom::Start(replace.end))?;
         io::copy(file, &mut out)?;
         out.set_permissions(file.metadata()?.permissions())?;
         out.sync_all()?;
@@ -443,11 +442,11 @@ mod tests {
 
     #[test]
     fn rotation_rewrites_only_the_orientation() {
-        use crate::quick::{Orientation, exif_orientation};
+        use crate::exif::Exif;
         let dir = tmp("rotate");
-        let orientation = |p: &Path| match exif_orientation(&fs::read(p).unwrap()) {
-            Orientation::Tag { value, .. } => value,
-            _ => 0,
+        let orientation = |p: &Path| {
+            let bytes = fs::read(p).unwrap();
+            Exif::find(&bytes).and_then(|e| e.orientation()).map_or(0, |(_, _, value)| value)
         };
 
         // No EXIF yet: JFIF header, then image data.
@@ -468,6 +467,18 @@ mod tests {
         save_rotation(&plain, 2).unwrap();
         assert_eq!(orientation(&plain), 1);
         assert_eq!(fs::read_dir(&dir).unwrap().count(), 1); // no temp file left
+
+        // EXIF data without an orientation entry gets one; the rest survives.
+        let bare = dir.join("bare.jpg");
+        let thumb = [0xff, 0xd8, 7, 7, 0xff, 0xd9];
+        fs::write(&bare, crate::exif::tests::sample_jpeg(None, &thumb, true)).unwrap();
+        save_rotation(&bare, 3).unwrap();
+        assert_eq!(orientation(&bare), 8);
+        let bytes = fs::read(&bare).unwrap();
+        assert_eq!(&bytes[Exif::find(&bytes).unwrap().thumbnail().unwrap()], thumb);
+        save_rotation(&bare, 1).unwrap();
+        assert_eq!(orientation(&bare), 1);
+        fs::remove_file(&bare).unwrap();
 
         let png = touch(&dir, "x.png");
         assert!(save_rotation(&png, 1).unwrap_err().contains("only JPEG"));

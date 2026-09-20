@@ -355,7 +355,10 @@ async fn contact_sheet(app: &Rc<App>) -> Outcome {
         foreground: theme.color("foreground").to_string(),
         font: montage::label_font(),
     };
-    let paths: Vec<PathBuf> = files.into_iter().map(|(_, p)| p).collect();
+    let paths: Vec<(PathBuf, u8)> = {
+        let session = app.session.borrow();
+        files.into_iter().map(|(id, p)| (p, session.image(id).rotation)).collect()
+    };
     app.say("magick montage…", false);
     gio::spawn_blocking(move || sheet.run(&paths))
         .await

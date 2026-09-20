@@ -23,7 +23,8 @@ pub struct ContactSheet {
 }
 
 impl ContactSheet {
-    pub fn args(&self, files: &[PathBuf]) -> Vec<OsString> {
+    /// `files`: path and pending rotation (quarter turns clockwise).
+    pub fn args(&self, files: &[(PathBuf, u8)]) -> Vec<OsString> {
         let size = self.thumb_size;
         let mut args: Vec<OsString> = vec!["montage".into()];
         let mut push = |s: String| args.push(s.into());
@@ -31,7 +32,6 @@ impl ContactSheet {
         // hundreds of photos would be slow and memory hungry.
         push("-define".into());
         push(format!("jpeg:size={}x{}", size * 2, size * 2));
-        push("-auto-orient".into());
         push("-background".into());
         push(self.background.clone());
         push("-fill".into());
@@ -43,8 +43,19 @@ impl ContactSheet {
         let mut push = |s: String| args.push(s.into());
         push("-label".into());
         push(if self.labels { "%t".into() } else { String::new() });
-        // Absolute paths, so no file name can be mistaken for an option.
-        args.extend(files.iter().map(|f| f.clone().into_os_string()));
+        // Each image upright as omapic shows it: EXIF orientation, then any
+        // rotation still pending in the session. Paths are absolute, so no
+        // file name can be mistaken for an option.
+        for (path, quarters) in files {
+            args.push("(".into());
+            args.push(path.clone().into_os_string());
+            args.push("-auto-orient".into());
+            if quarters % 4 != 0 {
+                args.push("-rotate".into());
+                args.push((90 * (*quarters as u32 % 4)).to_string().into());
+            }
+            args.push(")".into());
+        }
         let mut push = |s: String| args.push(s.into());
         push("-tile".into());
         push(format!("{}x", self.columns));
@@ -55,7 +66,7 @@ impl ContactSheet {
     }
 
     /// Blocking; call from a worker thread.
-    pub fn run(&self, files: &[PathBuf]) -> Result<(), String> {
+    pub fn run(&self, files: &[(PathBuf, u8)]) -> Result<(), String> {
         if files.is_empty() {
             return Err("no images to put on the sheet".into());
         }
@@ -94,7 +105,7 @@ mod tests {
             foreground: "#fff".into(),
             font: None,
         };
-        let args = sheet.args(&["/a/1.jpg".into(), "/a/2.jpg".into()]);
+        let args = sheet.args(&[("/a/1.jpg".into(), 0), ("/a/2.jpg".into(), 3)]);
         let args: Vec<_> = args.iter().map(|a| a.to_str().unwrap()).collect();
         assert_eq!(args[0], "montage");
         let label = args.iter().position(|a| *a == "-label").unwrap();
@@ -104,5 +115,8 @@ mod tests {
         assert!(args.windows(2).any(|w| w == ["-tile", "5x"]));
         assert!(args.windows(2).any(|w| w == ["-geometry", "200x200+6+6"]));
         assert_eq!(*args.last().unwrap(), "/out/sheet.jpg");
+        let second = args.iter().position(|a| *a == "/a/2.jpg").unwrap();
+        assert_eq!(args[second - 1..second + 5], ["(", "/a/2.jpg", "-auto-orient", "-rotate", "270", ")"]);
+        assert_eq!(args[first + 1..first + 3], ["-auto-orient", ")"]);
     }
 }

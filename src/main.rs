@@ -1,4 +1,5 @@
 mod cli;
+mod exif;
 mod fsops;
 mod history;
 mod model;

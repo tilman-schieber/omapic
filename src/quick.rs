@@ -3,7 +3,6 @@
 //! preview embedded in a JPEG's EXIF block.
 
 use std::io::Read;
-use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
@@ -12,6 +11,8 @@ use gtk::gdk_pixbuf::{Colorspace, InterpType, Pixbuf, PixbufRotation};
 use gtk::gio::prelude::*;
 use gtk::glib;
 use gtk::prelude::*;
+
+use crate::exif::{self, Exif};
 
 pub struct Quick {
     pub texture: gdk::Texture,
@@ -94,128 +95,13 @@ fn embedded(path: &Path, target: i32) -> Option<Quick> {
     // APP1 sits at the very start and cannot exceed 64 KiB.
     let mut start = Vec::new();
     std::fs::File::open(path).ok()?.take(128 * 1024).read_to_end(&mut start).ok()?;
-    let (range, orientation) = exif_thumbnail(&start)?;
-    let bytes = glib::Bytes::from(&start[range]);
+    let exif = Exif::find(&start)?;
+    let orientation = exif.orientation().map_or(1, |(_, _, value)| value);
+    let bytes = glib::Bytes::from(&start[exif.thumbnail()?]);
     let texture = gdk::Texture::from_bytes(&bytes).ok()?;
     let texture = adjust(&texture, orientation, target).unwrap_or(texture);
     // Typically 160 px and letterboxed: fine to look at for a moment, not to keep.
     Some(Quick { texture, sharp: false })
-}
-
-/// Start of the TIFF block inside the JPEG's EXIF segment.
-fn find_tiff(jpeg: &[u8]) -> Option<usize> {
-    if jpeg.get(..2)? != [0xff, 0xd8] {
-        return None;
-    }
-    let mut pos = 2;
-    loop {
-        let marker = jpeg.get(pos..pos + 4)?;
-        if marker[0] != 0xff || marker[1] == 0xda || marker[1] == 0xd9 {
-            return None;
-        }
-        let length = u16::from_be_bytes([marker[2], marker[3]]) as usize;
-        if marker[1] == 0xe1 && jpeg.get(pos + 4..pos + 10)? == b"Exif\0\0" {
-            return Some(pos + 10);
-        }
-        pos += 2 + length;
-    }
-}
-
-/// What a JPEG says about its orientation, and where.
-#[derive(Debug, PartialEq)]
-pub enum Orientation {
-    NoExif,
-    /// EXIF data without an orientation entry.
-    NoTag,
-    /// File offset of the two value bytes, their byte order, the value.
-    Tag { offset: usize, little_endian: bool, value: u16 },
-}
-
-pub fn exif_orientation(jpeg: &[u8]) -> Orientation {
-    let Some(tiff_start) = find_tiff(jpeg) else { return Orientation::NoExif };
-    let find = || {
-        let tiff = &jpeg[tiff_start..];
-        let little = tiff.get(..2)? == b"II";
-        let read = |at: usize, len: usize| -> Option<usize> {
-            let bytes = tiff.get(at..at + len)?;
-            Some(bytes.iter().enumerate().fold(0, |value, (i, &b)| {
-                value | (b as usize) << (8 * if little { i } else { len - 1 - i })
-            }))
-        };
-        let ifd0 = read(4, 4)?;
-        (0..read(ifd0, 2)?).map(|i| ifd0 + 2 + i * 12).find(|&entry| read(entry, 2) == Some(0x0112)).map(
-            |entry| Orientation::Tag {
-                offset: tiff_start + entry + 8,
-                little_endian: little,
-                value: read(entry + 8, 2).unwrap_or(1) as u16,
-            },
-        )
-    };
-    find().unwrap_or(Orientation::NoTag)
-}
-
-/// The EXIF orientation that shows an image `quarters` further clockwise.
-pub fn turned(orientation: u16, quarters: u8) -> u16 {
-    (0..quarters % 4).fold(orientation, |o, _| match o {
-        6 => 3,
-        3 => 8,
-        8 => 1,
-        // the mirrored ones
-        2 => 7,
-        7 => 4,
-        4 => 5,
-        5 => 2,
-        _ => 6,
-    })
-}
-
-/// Turn a texture clockwise by quarter turns.
-pub fn rotate(texture: &gdk::Texture, quarters: u8) -> gdk::Texture {
-    let turned = adjust(texture, turned(1, quarters), i32::MAX - i32::MAX / 4);
-    turned.unwrap_or_else(|| texture.clone())
-}
-
-/// Locate the JPEG preview in a JPEG's EXIF data: (byte range, orientation).
-pub fn exif_thumbnail(jpeg: &[u8]) -> Option<(Range<usize>, u16)> {
-    let tiff_start = find_tiff(jpeg)?;
-    let tiff = &jpeg[tiff_start..];
-    let little = match tiff.get(..2)? {
-        b"II" => true,
-        b"MM" => false,
-        _ => return None,
-    };
-    let u16_at = |at: usize| -> Option<u16> {
-        let b: [u8; 2] = tiff.get(at..at + 2)?.try_into().ok()?;
-        Some(if little { u16::from_le_bytes(b) } else { u16::from_be_bytes(b) })
-    };
-    let u32_at = |at: usize| -> Option<usize> {
-        let b: [u8; 4] = tiff.get(at..at + 4)?.try_into().ok()?;
-        Some(if little { u32::from_le_bytes(b) } else { u32::from_be_bytes(b) } as usize)
-    };
-
-    let ifd0 = u32_at(4)?;
-    let entries0 = u16_at(ifd0)? as usize;
-    let mut orientation = 1;
-    for entry in (0..entries0).map(|i| ifd0 + 2 + i * 12) {
-        if u16_at(entry)? == 0x0112 {
-            orientation = u16_at(entry + 8)?;
-        }
-    }
-    let ifd1 = u32_at(ifd0 + 2 + entries0 * 12)?;
-    if ifd1 == 0 {
-        return None;
-    }
-    let (mut offset, mut length) = (None, None);
-    for entry in (0..u16_at(ifd1)? as usize).map(|i| ifd1 + 2 + i * 12) {
-        match u16_at(entry)? {
-            0x0201 => offset = u32_at(entry + 8),
-            0x0202 => length = u32_at(entry + 8),
-            _ => {}
-        }
-    }
-    let start = tiff_start + offset?;
-    let range = start..start.checked_add(length?)?;
-    (jpeg.get(range.clone())?.starts_with(&[0xff, 0xd8])).then_some((range, orientation))
 }
 
 // ── texture helpers ─────────────────────────────────────────────────────
@@ -230,6 +116,12 @@ pub fn texture_from_pixbuf(pixbuf: &Pixbuf) -> gdk::Texture {
         pixbuf.rowstride() as usize,
     )
     .into()
+}
+
+/// Turn a texture clockwise by quarter turns.
+pub fn rotate(texture: &gdk::Texture, quarters: u8) -> gdk::Texture {
+    let turned = adjust(texture, exif::turned(1, quarters), i32::MAX - i32::MAX / 4);
+    turned.unwrap_or_else(|| texture.clone())
 }
 
 /// Apply an EXIF orientation and shrink to `max`. `None` when nothing had to change.
@@ -265,72 +157,6 @@ fn adjust(texture: &gdk::Texture, orientation: u16, max: i32) -> Option<gdk::Tex
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// SOI, APP0, then APP1 with a big-endian TIFF: IFD0 {orientation},
-    /// IFD1 {offset, length}, thumbnail bytes.
-    fn sample_jpeg(orientation: u16, thumbnail: &[u8]) -> Vec<u8> {
-        let mut tiff = Vec::new();
-        tiff.extend(b"MM\0\x2a");
-        tiff.extend(8u32.to_be_bytes()); // IFD0 at 8
-        tiff.extend(1u16.to_be_bytes());
-        tiff.extend([0x01, 0x12, 0, 3, 0, 0, 0, 1]);
-        tiff.extend(orientation.to_be_bytes());
-        tiff.extend([0, 0]);
-        let ifd1 = 8 + 2 + 12 + 4;
-        tiff.extend((ifd1 as u32).to_be_bytes());
-        let data = ifd1 + 2 + 24 + 4;
-        tiff.extend(2u16.to_be_bytes());
-        tiff.extend([0x02, 0x01, 0, 4, 0, 0, 0, 1]);
-        tiff.extend((data as u32).to_be_bytes());
-        tiff.extend([0x02, 0x02, 0, 4, 0, 0, 0, 1]);
-        tiff.extend((thumbnail.len() as u32).to_be_bytes());
-        tiff.extend(0u32.to_be_bytes());
-        tiff.extend(thumbnail);
-
-        let mut jpeg = vec![0xff, 0xd8, 0xff, 0xe0, 0, 4, b'J', b'F'];
-        jpeg.extend([0xff, 0xe1]);
-        jpeg.extend(((tiff.len() + 8) as u16).to_be_bytes());
-        jpeg.extend(b"Exif\0\0");
-        jpeg.extend(&tiff);
-        jpeg.extend([0xff, 0xda, 0, 2]);
-        jpeg
-    }
-
-    #[test]
-    fn finds_exif_thumbnail() {
-        let thumb = [0xff, 0xd8, 1, 2, 3, 0xff, 0xd9];
-        let jpeg = sample_jpeg(6, &thumb);
-        let (range, orientation) = exif_thumbnail(&jpeg).unwrap();
-        assert_eq!(&jpeg[range], thumb);
-        assert_eq!(orientation, 6);
-    }
-
-    #[test]
-    fn orientation_tag_and_turning() {
-        let jpeg = sample_jpeg(6, &[0xff, 0xd8]);
-        let Orientation::Tag { offset, little_endian, value } = exif_orientation(&jpeg) else { panic!() };
-        assert_eq!((little_endian, value), (false, 6));
-        assert_eq!(jpeg[offset..offset + 2], [0, 6]);
-        assert_eq!(exif_orientation(&[0xff, 0xd8, 0xff, 0xda, 0, 2]), Orientation::NoExif);
-
-        assert_eq!([1, 2, 3].map(|q| turned(1, q)), [6, 3, 8]);
-        assert_eq!(turned(8, 1), 1);
-        assert_eq!(turned(6, 4), 6);
-        for mirrored in [2, 4, 5, 7] {
-            assert_eq!(turned(turned(mirrored, 1), 3), mirrored);
-            assert!([2, 4, 5, 7].contains(&turned(mirrored, 1)));
-        }
-    }
-
-    #[test]
-    fn rejects_garbage() {
-        assert!(exif_thumbnail(b"junk").is_none());
-        assert!(exif_thumbnail(&[0xff, 0xd8, 0xff, 0xda, 0, 2]).is_none());
-        assert!(exif_thumbnail(&sample_jpeg(1, b"not a jpeg")).is_none());
-        let mut truncated = sample_jpeg(1, &[0xff, 0xd8, 0, 0]);
-        truncated.truncate(truncated.len() - 6);
-        assert!(exif_thumbnail(&truncated).is_none());
-    }
 
     #[test]
     fn reads_png_text() {

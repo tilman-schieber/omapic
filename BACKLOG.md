@@ -9,8 +9,6 @@ or it is one more explicit action on a bin.
 
 ## Polish
 
-- **Rotation for EXIF blocks without an orientation entry** (needs IFD rewriting)
-  and honouring pending rotations in contact sheets.
 - **Pan with the keyboard** while at actual pixels (e.g. `Shift`+arrows).
 - **Rotate EXIF-oriented dimensions** in the caption (shows sensor orientation today).
 - **Sort keys for the natural order** — `o` cycles name / mtime / size;
