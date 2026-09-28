@@ -81,14 +81,18 @@ pub fn factory(app: &Rc<App>) -> gtk::SignalListItemFactory {
             .chain_closure::<bool>(glib::closure!(|_: Option<glib::Object>, ws: u32| ws != 0))
             .bind(&badge, "visible", gtk::Widget::NONE);
 
-        // Real pointer motion only: content scrolling under a resting pointer
-        // (keyboard navigation) must not steal the preview.
+        // GTK also reports motion when the grid scrolls under a resting
+        // pointer; the app tells that apart by the position in the window.
         let motion = gtk::EventControllerMotion::new();
         let (app, li) = (weak.clone(), list_item.downgrade());
-        motion.connect_motion(move |_, _, _| {
-            if let (Some(app), Some(item)) = (app.upgrade(), item_of(&li)) {
-                app.hover(Some(item.id() as usize));
-            }
+        motion.connect_motion(move |controller, x, y| {
+            let (Some(app), Some(item)) = (app.upgrade(), item_of(&li)) else { return };
+            let Some(cell) = controller.widget() else { return };
+            let Some(root) = cell.root() else { return };
+            let Some(at) = cell.compute_point(&root, &gtk::graphene::Point::new(x as f32, y as f32)) else {
+                return;
+            };
+            app.pointer_over(item.id() as usize, (at.x(), at.y()));
         });
         cell.add_controller(motion);
 

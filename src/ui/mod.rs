@@ -80,6 +80,10 @@ pub struct App {
     /// Ids in the store, in display order.
     view: RefCell<Vec<ImageId>>,
     hovered: Cell<Option<ImageId>>,
+    /// The keyboard took over: hovering doesn't preview until the pointer moves.
+    hover_paused: Cell<bool>,
+    /// Pointer position in window coordinates, as last seen over a cell.
+    pointer: Cell<Option<(f32, f32)>>,
     show_names: Cell<bool>,
     /// What `y` put on the clipboard, to hand over when quitting.
     yanked: RefCell<Option<String>>,
@@ -206,6 +210,8 @@ pub fn build(application: &gtk::Application, input: Input, print: Option<char>) 
         bound: RefCell::default(),
         view: RefCell::default(),
         hovered: Cell::new(None),
+        hover_paused: Cell::new(false),
+        pointer: Cell::new(None),
         show_names: Cell::new(false),
         yanked: RefCell::default(),
         sort_key: Cell::new(SortKey::Input),
@@ -677,6 +683,28 @@ impl App {
 
     // ── actions ──────────────────────────────────────────────────────────
 
+    /// The pointer is over a thumbnail. If it hasn't moved in the window,
+    /// the grid scrolled underneath it — which only counts while the mouse
+    /// is in charge, not after the keyboard took over.
+    fn pointer_over(self: &Rc<Self>, id: ImageId, at: (f32, f32)) {
+        let moved = self.pointer.get().is_none_or(|(x, y)| (x - at.0).abs() + (y - at.1).abs() > 2.0);
+        self.pointer.set(Some(at));
+        if moved {
+            self.hover_paused.set(false);
+        }
+        if !self.hover_paused.get() {
+            self.hover(Some(id));
+        }
+    }
+
+    /// Keys move the selection; the preview follows it until the mouse moves.
+    fn pause_hover(self: &Rc<Self>) {
+        self.hover_paused.set(true);
+        if self.hovered.take().is_some() && !self.palette.is_open() {
+            self.update_preview();
+        }
+    }
+
     fn hover(self: &Rc<Self>, id: Option<ImageId>) {
         if self.hovered.replace(id) != id && !self.palette.is_open() {
             self.update_preview();
@@ -1104,10 +1132,18 @@ impl App {
     }
 
     fn key(self: &Rc<Self>, key: gdk::Key, state: gdk::ModifierType) -> glib::Propagation {
-        use gdk::Key;
         if self.palette.is_open() {
             return glib::Propagation::Proceed;
         }
+        let handled = self.handle_key(key, state);
+        if handled == glib::Propagation::Stop {
+            self.pause_hover();
+        }
+        handled
+    }
+
+    fn handle_key(self: &Rc<Self>, key: gdk::Key, state: gdk::ModifierType) -> glib::Propagation {
+        use gdk::Key;
         let ctrl = state.contains(gdk::ModifierType::CONTROL_MASK);
         let alt = state.contains(gdk::ModifierType::ALT_MASK);
         let shift = state.contains(gdk::ModifierType::SHIFT_MASK);
