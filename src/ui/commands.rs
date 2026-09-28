@@ -30,7 +30,7 @@ enum Command {
 
 const COMMANDS: &[(&str, Command)] = &[
     ("Open folder… (new session)", Command::Open),
-    ("Add folder to session…", Command::Add),
+    ("Add folder to what is shown…", Command::Add),
     ("Move workspace to folder…", Command::Transfer(Op::Move)),
     ("Copy workspace to folder…", Command::Transfer(Op::Copy)),
     ("Symlink workspace into folder…", Command::Transfer(Op::Symlink)),
@@ -58,6 +58,11 @@ pub async fn run(app: Rc<App>, index: usize) {
 /// `Ctrl+O`, and what an empty window starts with.
 pub async fn run_open(app: Rc<App>) {
     execute(app, Command::Open).await;
+}
+
+/// `Ctrl+Shift+O`.
+pub async fn run_add(app: Rc<App>) {
+    execute(app, Command::Add).await;
 }
 
 /// `!` goes straight to the shell prompt.
@@ -236,13 +241,20 @@ async fn save_rotations(app: &Rc<App>) -> Outcome {
 
 /// A new session in the same window: a folder, or an image to open its folder at.
 async fn open(app: &Rc<App>) -> Outcome {
-    let title = "Open folder (or image) — starts a new session";
+    let title = "Open folder (or image) — starts a new session · end with ** for subfolders";
     let Some(answer) = app.palette.ask(title, &app.current_folder(), true).await else { return Ok(None) };
-    let path = fsops::expand(&answer);
+    let (typed, recursive) = crate::cli::split_recursive(&answer);
+    let path = fsops::expand(typed);
     if !path.exists() {
         return Err(format!("no such folder: {}", path.display()));
     }
-    let input = crate::cli::resolve(&[path.display().to_string()]);
+    if recursive {
+        app.say("looking through subfolders…", false);
+    }
+    let arg = path.display().to_string();
+    let input = gio::spawn_blocking(move || crate::cli::resolve(&[arg], recursive))
+        .await
+        .map_err(|_| "folder scan crashed".to_string())?;
     if input.paths.is_empty() {
         return Err(format!("no images in {}", path.display())); // and the session stays
     }
@@ -259,15 +271,26 @@ async fn open(app: &Rc<App>) -> Outcome {
 
 /// More images for the session at hand; nothing is lost, so no questions.
 async fn add(app: &Rc<App>) -> Outcome {
-    let title = "Add folder (or image) to this session";
-    let Some(answer) = app.palette.ask(title, &app.current_folder(), true).await else { return Ok(None) };
-    let path = fsops::expand(&answer);
+    let title = format!("Add folder (or image) to {} · end with ** for subfolders", app.view_name());
+    let Some(answer) = app.palette.ask(&title, &app.current_folder(), true).await else { return Ok(None) };
+    let (typed, recursive) = crate::cli::split_recursive(&answer);
+    let path = fsops::expand(typed);
     if !path.exists() {
         return Err(format!("no such folder: {}", path.display()));
     }
-    match app.add_and_show(crate::cli::expand(&[path.clone()])) {
+    if recursive {
+        app.say("looking through subfolders…", false);
+    }
+    let dir = path.clone();
+    let found = gio::spawn_blocking(move || crate::cli::expand(&[dir], recursive))
+        .await
+        .map_err(|_| "folder scan crashed".to_string())?;
+    let capped = found.len() >= crate::cli::TREE_LIMIT;
+    let place = app.view_name();
+    match app.add_and_show(found) {
         0 => Err(format!("nothing new in {}", path.display())),
-        n => Ok(Some(format!("{n} images added from {}", path.display()))),
+        n if capped => Ok(Some(format!("{n} images added to {place} (stopped at {})", crate::cli::TREE_LIMIT))),
+        n => Ok(Some(format!("{n} images added to {place} from {}", path.display()))),
     }
 }
 

@@ -87,10 +87,56 @@ pub fn is_jpeg(path: &Path) -> bool {
     extension.eq_ignore_ascii_case("jpg") || extension.eq_ignore_ascii_case("jpeg")
 }
 
+/// Most images a subfolder scan collects; beyond that it stops.
+pub const TREE_LIMIT: usize = 20_000;
+
+/// Images in `dir` and all its subfolders, in natural order of their paths.
+/// Hidden folders and symlinked folders are skipped; stops at `TREE_LIMIT`.
+/// Returns whether the limit cut the scan short. Blocking.
+pub fn scan_tree(dir: &Path) -> (Vec<PathBuf>, bool) {
+    let mut images = Vec::new();
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(folder) = pending.pop() {
+        let Ok(read) = std::fs::read_dir(&folder) else { continue };
+        let mut subfolders = Vec::new();
+        let mut here = Vec::new();
+        for entry in read.flatten() {
+            let (path, kind) = (entry.path(), entry.file_type());
+            let hidden = entry.file_name().to_string_lossy().starts_with('.');
+            match kind {
+                Ok(kind) if kind.is_dir() && !hidden => subfolders.push(path),
+                // symlinks to files count, symlinks to folders don't (cycles)
+                Ok(kind) if !kind.is_dir() && is_image(&path) && path.is_file() => here.push(path),
+                _ => {}
+            }
+        }
+        here.sort_by(|a, b| natural_cmp(&file_name(a), &file_name(b)));
+        images.extend(here);
+        if images.len() >= TREE_LIMIT {
+            images.truncate(TREE_LIMIT);
+            return (images, true);
+        }
+        subfolders.sort_by(|a, b| natural_cmp(&file_name(b), &file_name(a))); // popped in order
+        pending.extend(subfolders);
+    }
+    (images, false)
+}
+
+/// A path as typed into a prompt: a trailing `**` asks for subfolders too.
+pub fn split_recursive(text: &str) -> (&str, bool) {
+    let text = text.trim();
+    match text.strip_suffix("**") {
+        Some(rest) => (rest, true),
+        None => (text, false),
+    }
+}
+
 /// * no argument: images of the current directory
 /// * one file: all images of its directory, that file selected
 /// * several paths: exactly those files (directories contribute their images)
-pub fn resolve(args: &[String]) -> Input {
+/// `recursive`: folders contribute their subfolders' images too.
+pub fn resolve(args: &[String], recursive: bool) -> Input {
+    let scan_dir = |dir: &Path| if recursive { scan_tree(dir).0 } else { scan_dir(dir) };
     let absolute = |p: &str| std::path::absolute(p).unwrap_or_else(|_| PathBuf::from(p));
     match args {
         [] => Input { paths: scan_dir(&absolute(".")), select: None },
@@ -125,11 +171,11 @@ pub fn resolve(args: &[String]) -> Input {
 }
 
 /// Images among `paths`: files as they are, folders by their content.
-pub fn expand(paths: &[PathBuf]) -> Vec<PathBuf> {
+pub fn expand(paths: &[PathBuf], recursive: bool) -> Vec<PathBuf> {
     let mut images = Vec::new();
     for path in paths {
         if path.is_dir() {
-            images.extend(scan_dir(path));
+            images.extend(if recursive { scan_tree(path).0 } else { scan_dir(path) });
         } else if path.is_file() && is_image(path) {
             images.push(path.clone());
         }
@@ -216,6 +262,27 @@ mod tests {
         assert_eq!(order(&paths, SortKey::Size), [1, 2, 0]);
         assert_eq!(order(&paths, SortKey::Taken).len(), 3);
         assert_eq!(SortKey::Name.next(), SortKey::Input);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn subfolders() {
+        let dir = std::env::temp_dir().join(format!("omapic-tree-{}", std::process::id()));
+        for sub in ["b/deep", "a", ".hidden"] {
+            std::fs::create_dir_all(dir.join(sub)).unwrap();
+        }
+        for file in ["top.jpg", "a/1.png", "b/2.jpg", "b/deep/3.jpg", ".hidden/x.jpg", "a/notes.txt"] {
+            std::fs::write(dir.join(file), b"").unwrap();
+        }
+        std::os::unix::fs::symlink(&dir, dir.join("a/loop")).unwrap();
+        let (found, cut) = scan_tree(&dir);
+        let names: Vec<String> = found.iter().map(|p| p.strip_prefix(&dir).unwrap().display().to_string()).collect();
+        assert_eq!(names, ["top.jpg", "a/1.png", "b/2.jpg", "b/deep/3.jpg"]);
+        assert!(!cut);
+        assert_eq!(resolve(&[dir.display().to_string()], false).paths.len(), 1);
+        assert_eq!(resolve(&[dir.display().to_string()], true).paths.len(), 4);
+        assert_eq!(split_recursive(" ~/pics/** "), ("~/pics/", true));
+        assert_eq!(split_recursive("~/pics"), ("~/pics", false));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

@@ -43,11 +43,13 @@ JPEG, PNG, WebP, GIF (animated in the preview) and TIFF are supported.
     omapic image.jpg     # all images of that directory, image.jpg selected
     omapic DIR           # images of DIR
     omapic *.jpg …       # exactly the given files, in the given order
+    omapic -r DIR        # DIR and all its subfolders
     omapic --print …     # on quit, print the paths of the images then shown
 
 Started where there are no images (from a launcher, say), omapic asks for a
-folder right away. `Ctrl+O` opens another folder at any time, and files or
-folders dropped on the window join the session.
+folder right away. `Ctrl+O` opens another folder at any time; `Ctrl+Shift+O`
+adds one to what you are looking at, as does dropping files or folders on
+the window. In these prompts a path ending in `**` includes subfolders.
 
 Hover or move the selection to preview. The right end of the status line
 always hints at the keys that matter right now; `?` shows all of them.
@@ -73,9 +75,12 @@ still undecided.
 
 **…work on another folder, or on several at once?**
 `Ctrl+O` starts a new session in the same window (it asks first if bins,
-marks or an arrangement would be lost). `:` → *Add folder to session…* — or
-dropping files and folders from a file manager onto the window — brings more
-images into the session you have, so one bin can collect from many places.
+marks or an arrangement would be lost). `Ctrl+Shift+O` — or dropping files
+and folders from a file manager onto the window — adds images to the view on
+screen: shown bin 3, they land in bin 3; shown the marked images, they get
+marked. So one bin can collect from many places. End a path with `**`
+(`~/Pictures/2026/**`) to include subfolders; hidden and symlinked folders
+are skipped, and it stops at 20 000 images.
 
 **…collect the keepers in a new folder?**
 `Alt+1` to show the bin, `:` → *Move workspace to folder…* (or *Copy…*), type
@@ -168,6 +173,7 @@ nothing is gone for good.
 | Act | |
 |---|---|
 | `Ctrl+O` | open another folder (new session) |
+| `Ctrl+Shift+O` | add a folder to what is shown |
 | `:` or `Ctrl+K` | command palette |
 | `!` | shell command on the images shown |
 | `y` / `Y` | copy the path of the selected image(s) / of everything shown (kept after quitting via `wl-copy`, if installed) |
@@ -198,8 +204,8 @@ shown**, in the order shown.
 
 | Command | |
 |---|---|
-| Open folder… (`Ctrl+O`) | a new session in this window; a path to an image opens its folder with that image selected |
-| Add folder to session… | more images for the current session, unbinned; same as dropping them on the window |
+| Open folder… (`Ctrl+O`) | a new session in this window; a path to an image opens its folder with that image selected; `**` at the end includes subfolders |
+| Add folder to what is shown… (`Ctrl+Shift+O`) | more images, into the bin (or marks) on screen; same as dropping them on the window |
 | Move workspace to folder… | asks for a folder (Tab completes, `~` works, created if missing) |
 | Copy workspace to folder… | same, leaving the originals |
 | Symlink / Hard-link workspace into folder… | a selection folder without duplicating the data |

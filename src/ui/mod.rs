@@ -51,7 +51,8 @@ const HELP: &str = "\
 <b>+</b>  <b>-</b>               larger / smaller thumbnails
 <b>f</b>                  file names under thumbnails
 <b>i</b>                  file and camera info under the preview
-<b>ctrl+o</b>             open another folder (or drop files on the window)
+<b>ctrl+o</b>             open another folder (a path ending in ** includes subfolders)
+<b>ctrl+shift+o</b>       add a folder to what is shown (or drop files on the window)
 <b>:</b>  <b>ctrl+k</b>          commands
 <b>!</b>                  run a shell command on the images shown
 <b>?</b>                  this sheet
@@ -866,12 +867,13 @@ impl App {
         ids
     }
 
-    /// More images for the running session (palette, or dropped on the window).
+    /// More images for the running session (palette, or dropped on the
+    /// window). They join the view on screen: a bin, the marks, or just all.
     pub(super) fn add_and_show(self: &Rc<Self>, paths: Vec<std::path::PathBuf>) -> usize {
         let ids = self.add_images(paths);
         if let Some(&first) = ids.first() {
             let mut session = self.session.borrow_mut();
-            session.set_active(0);
+            session.adopt(&ids); // into the bin (or marks) being looked at
             session.select(Some(first));
         }
         self.hovered.set(None);
@@ -921,9 +923,9 @@ impl App {
     fn dropped(self: &Rc<Self>, paths: Vec<std::path::PathBuf>) {
         let args: Vec<String> = paths.iter().map(|p| p.display().to_string()).collect();
         let count = if self.session.borrow().len() == 0 {
-            self.open(crate::cli::resolve(&args))
+            self.open(crate::cli::resolve(&args, false))
         } else {
-            self.add_and_show(crate::cli::expand(&paths))
+            self.add_and_show(crate::cli::expand(&paths, false))
         };
         let text = match count {
             0 => "nothing new among what was dropped".to_string(),
@@ -1158,6 +1160,9 @@ impl App {
             (Key::u | Key::grave | Key::dead_grave, _) if alt && !ctrl => self.show_workspace(UNBINNED),
             (_, Some(d)) if !ctrl => self.toggle_bin(if d == 0 { 10 } else { d }),
             (Key::k, _) if ctrl => self.palette.open_commands(),
+            (Key::O, _) if ctrl && !alt => {
+                glib::spawn_future_local(commands::run_add(self.clone()));
+            }
             (Key::o, _) if ctrl && !alt => {
                 glib::spawn_future_local(commands::run_open(self.clone()));
             }

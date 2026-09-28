@@ -21,6 +21,7 @@ omapic — keyboard-driven image viewer and temporary organizer
   omapic DIR           images of DIR
   omapic *.jpg …       exactly the given files
 
+  -r, --recursive      folders include their subfolders (hidden ones excepted)
   --print              on quit, print the paths of the images then shown
                        (one per line, in display order) — for pipelines:
                        omapic --print *.jpg | xargs -d '\\n' cp -t picked/
@@ -40,7 +41,9 @@ fn main() -> gtk::glib::ExitCode {
     } else {
         args.iter().any(|a| a == "--print").then_some('\n')
     };
-    let args: Vec<String> = args.into_iter().filter(|a| a != "--print" && a != "--print0").collect();
+    let recursive = args.iter().any(|a| a == "-r" || a == "--recursive");
+    let flags = ["--print", "--print0", "-r", "--recursive"];
+    let args: Vec<String> = args.into_iter().filter(|a| !flags.contains(&a.as_str())).collect();
 
     // Every invocation is its own throwaway session.
     let application = gtk::Application::builder()
@@ -48,7 +51,7 @@ fn main() -> gtk::glib::ExitCode {
         .flags(gio::ApplicationFlags::NON_UNIQUE)
         .build();
     application.connect_activate(move |application| {
-        ui::build(application, cli::resolve(&args), print);
+        ui::build(application, cli::resolve(&args, recursive), print);
     });
     application.run_with_args::<&str>(&[])
 }

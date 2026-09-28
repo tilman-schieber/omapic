@@ -456,6 +456,22 @@ impl Session {
         (first..self.images.len()).collect()
     }
 
+    /// Newly added images join what is being looked at: the active bin, or
+    /// the marks. In "all" and "unbinned" they need nothing. One undo step.
+    pub fn adopt(&mut self, ids: &[ImageId]) {
+        match self.active {
+            ws @ 1..=WORKSPACES => self.assign_many(ids, Some(ws)),
+            MARKED if !ids.is_empty() => {
+                self.checkpoint(self.snapshot());
+                for &id in ids {
+                    self.images[id].mark = true;
+                    self.views[MARKED as usize].explicit_order.push(id);
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// What would be lost by starting over, e.g. "12 binned, 3 marked".
     /// `None` if the session holds no organizing work.
     pub fn work_summary(&self) -> Option<String> {
@@ -682,6 +698,23 @@ mod tests {
         assert_eq!((s.len(), s.work_summary()), (2, None));
         assert!(!s.undo() && !s.manual_sort());
         assert!(s.view_order(2).is_empty());
+    }
+
+    #[test]
+    fn added_images_join_the_view() {
+        let mut s = session(2);
+        s.set_active(3);
+        let ids = s.add(vec![PathBuf::from("/p/x.jpg"), PathBuf::from("/p/y.jpg")]);
+        s.adopt(&ids);
+        assert_eq!(s.visible(), vec![2, 3]);
+        assert!(s.undo());
+        assert!(s.visible().is_empty());
+        s.set_active(MARKED);
+        s.adopt(&[0]);
+        assert_eq!(s.visible(), vec![0]);
+        s.set_active(0);
+        s.adopt(&[1]); // nothing to join
+        assert_eq!((s.image(1).workspace, s.image(1).mark), (None, false));
     }
 
     #[test]
